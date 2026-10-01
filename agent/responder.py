@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 
 from .config import DEFAULT_MAX_ITERATIONS, DEFAULT_MODEL
@@ -67,6 +68,28 @@ actually called a tool and got a real result back.
 Recent conversation history may be included for context; use it only
 to understand what was discussed, not as something to repeat back.
 """
+
+
+def strip_markdown(text):
+    """
+    Backstop for the system prompt's "no markdown" instruction, which --
+    like every prompt-only instruction -- isn't reliable on its own (the
+    model still slips into **bold** sometimes despite being told not
+    to). Every reply gets rendered as plain text AND read aloud via TTS,
+    so a literal "**" is both visually wrong and sounds wrong spoken
+    aloud; this strips the common markers unconditionally rather than
+    trusting the model never to use them.
+    """
+    if not text:
+        return text
+
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"__(.+?)__", r"\1", text)
+    text = re.sub(r"(?<!\w)\*(?!\s)(.+?)(?<!\s)\*(?!\w)", r"\1", text)
+    text = re.sub(r"(?m)^\s*[-*]\s+", "", text)
+    text = re.sub(r"(?m)^#{1,6}\s+", "", text)
+
+    return text
 
 
 def format_history(history, max_turns=5):
@@ -151,7 +174,7 @@ class Responder:
             tool_calls = response.message.tool_calls
 
             if not tool_calls:
-                return response.message.content or ""
+                return strip_markdown(response.message.content or "")
 
             for tool_call in tool_calls:
                 tool_name = tool_call.function.name
