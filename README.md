@@ -56,9 +56,16 @@ for the full reasoning; the short version:
 ## Running it
 
 ```bash
-cp .env.example .env    # fill in OPENROUTER_API
+cp .env.example .env    # fill in OPENROUTER_API and AGENT_API_TOKEN
 python agent_server.py  # listens on 0.0.0.0:8766
 ```
+
+Every request needs `Authorization: Bearer <AGENT_API_TOKEN>` -- the
+server refuses to even start without that token configured. This
+isn't a per-user login system, just one shared secret between the
+server and the one phone app that talks to it, so a public EC2/ECS
+endpoint isn't wide open to anyone who finds the URL. See
+`agent_server.py`'s `_authorized()`.
 
 ```
 POST /chat   {"message": "..."} -> {"reply": "...", "status": "..."}

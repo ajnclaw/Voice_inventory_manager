@@ -29,6 +29,16 @@ INVENTORY_DB = PROJECT_ROOT / "inventory.db"
 
 _load_dotenv(PROJECT_ROOT / ".env")
 
+# Shared-secret auth for agent_server.py. Unlike ~/ai-agent's server
+# (only ever reachable through an adb-reverse tunnel to one specific,
+# physically-connected phone -- private by construction), this one is
+# meant to sit behind a public EC2/ECS endpoint, reachable by anyone who
+# finds the URL. There is no separate per-user login here -- one shared
+# token for the one shop owner -- but agent_server.py refuses to even
+# start without one set, so "forgot to configure auth" can't silently
+# mean "wide open on the internet." See agent_server.py's check.
+AGENT_API_TOKEN = os.environ.get("AGENT_API_TOKEN", "")
+
 # ---------------------------------------------------------------------------
 # LLM provider selection -- same provider-agnostic setup as ~/ai-agent's
 # llm_client.py: every provider here exposes an OpenAI-compatible

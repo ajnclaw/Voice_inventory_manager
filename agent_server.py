@@ -30,6 +30,7 @@ Usage:
                                   # inventory.db and logs/ are created)
 """
 
+import hmac
 import os
 
 os.environ.setdefault("AGENT_AUTO_APPROVE", "1")
@@ -38,7 +39,7 @@ import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from agent.compactor import compact_history
-from agent.config import DEFAULT_MODEL, LLM_PROVIDER
+from agent.config import AGENT_API_TOKEN, DEFAULT_MODEL, LLM_PROVIDER
 from agent.logger import RunLogger
 from agent.responder import Responder
 
@@ -62,13 +63,45 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _authorized(self):
+        """
+        Shared-secret check against AGENT_API_TOKEN (see config.py).
+        Expects `Authorization: Bearer <token>`. Every endpoint goes
+        through this, including /health -- there's no "harmless" public
+        endpoint here, and uniform is easier to reason about than
+        remembering which routes are exempt. hmac.compare_digest avoids
+        leaking the token one byte at a time via a timing side channel.
+        """
+        header = self.headers.get("Authorization", "")
+        prefix = "Bearer "
+
+        if not header.startswith(prefix):
+            return False
+
+        provided = header[len(prefix):].strip()
+
+        return hmac.compare_digest(provided, AGENT_API_TOKEN)
+
+    def _require_auth(self):
+        if self._authorized():
+            return True
+
+        self._send_json({"error": "unauthorized"}, status=401)
+        return False
+
     def do_GET(self):
+        if not self._require_auth():
+            return
+
         if self.path == "/health":
             self._send_json({"status": "ok", "turns": len(history)})
         else:
             self._send_json({"error": "not found"}, status=404)
 
     def do_POST(self):
+        if not self._require_auth():
+            return
+
         if self.path != "/chat":
             self._send_json({"error": "not found"}, status=404)
             return
@@ -112,6 +145,9 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"reply": reply, "status": status})
 
     def do_DELETE(self):
+        if not self._require_auth():
+            return
+
         if self.path == "/history":
             global history
             history = []
@@ -125,6 +161,16 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    if not AGENT_API_TOKEN:
+        raise SystemExit(
+            "Refusing to start: AGENT_API_TOKEN is not set.\n"
+            "This server is meant to sit behind a public EC2/ECS endpoint "
+            "-- without a token, every /chat, /health, and /history "
+            "request would be answered to anyone on the internet, "
+            "including the inventory-changing ones. Set AGENT_API_TOKEN "
+            "in .env (see .env.example) before running this."
+        )
+
     server = HTTPServer((HOST, PORT), Handler)
 
     print(f"Inventory agent listening on http://{HOST}:{PORT}")
