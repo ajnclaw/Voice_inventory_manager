@@ -38,10 +38,11 @@ for the full reasoning; the short version:
   A small, non-overlapping tool list is also just easier for the LLM to
   route correctly; that's not only a safety argument.
 
-- **No third-party dependencies.** Everything here is Python stdlib.
-  The only outbound call this makes is to the LLM provider's hosted API
-  (OpenRouter by default) -- no local model, no GPU. That's what makes
-  this cheap to host anywhere.
+- **Minimal dependencies.** Started stdlib-only; PyMuPDF was added for
+  bulk import (PDF text extraction / page rendering). Still no local
+  model, no GPU -- image and handwriting reading goes through the same
+  hosted multimodal LLM already used for chat, not a separate OCR
+  engine. That's what keeps this cheap to host anywhere.
 
 - **Approval is auto-approved for inventory writes by design**, not
   because writes don't matter, but because recording a sale/restock/
@@ -56,8 +57,10 @@ for the full reasoning; the short version:
 ## Running it
 
 ```bash
-cp .env.example .env    # fill in OPENROUTER_API and AGENT_API_TOKEN
-python agent_server.py  # listens on 0.0.0.0:8766
+cp .env.example .env              # fill in OPENROUTER_API and AGENT_API_TOKEN
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python3 agent_server.py  # listens on 0.0.0.0:8766
 ```
 
 Every request needs `Authorization: Bearer <AGENT_API_TOKEN>` -- the
@@ -68,10 +71,18 @@ endpoint isn't wide open to anyone who finds the URL. See
 `agent_server.py`'s `_authorized()`.
 
 ```
-POST /chat   {"message": "..."} -> {"reply": "...", "status": "..."}
-DELETE /history            -> clears conversation history
-GET /health                 -> {"status": "ok", "turns": N}
+POST /chat             {"message": "..."} -> {"reply": "...", "status": "..."}
+POST /upload           {"filename", "mime_type", "content_base64"} -> extracted items (no writes)
+POST /import/confirm   {"items": [...]} -> applies them, returns per-item results
+DELETE /history         -> clears conversation history
+GET /health              -> {"status": "ok", "turns": N}
 ```
+
+`/upload` accepts a text/CSV file, a PDF, or a photo and extracts
+candidate sales/restocks/corrections/new items WITHOUT writing
+anything -- the web UI shows a preview, and only `/import/confirm`
+(after the owner reviews it) actually touches `inventory.db`. See
+`agent/import_extractor.py`.
 
 `inventory.db` and `logs/` are created in the current working
 directory on first run -- always run this from the project root.
