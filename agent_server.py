@@ -24,12 +24,17 @@ tunnel or reverse proxy reachable from the owner's phone over the
 network, not only from localhost on the same machine.
 
 Usage:
-    python agent_server.py       # listens on 0.0.0.0:8766, run from
-                                  # the project root (cwd determines
-                                  # config.PROJECT_ROOT / where
-                                  # inventory.db and logs/ are created)
+    .venv/bin/python3 agent_server.py   # listens on 0.0.0.0:8766, run
+                                  # from the project root (cwd
+                                  # determines config.PROJECT_ROOT /
+                                  # where inventory.db and logs/ are
+                                  # created). Needs the venv (not bare
+                                  # system python3) since bulk import
+                                  # depends on PyMuPDF -- see
+                                  # requirements.txt.
 """
 
+import base64
 import hmac
 import os
 
@@ -41,6 +46,12 @@ from pathlib import Path
 
 from agent.compactor import compact_history
 from agent.config import AGENT_API_TOKEN, DEFAULT_MODEL, LLM_PROVIDER, PROJECT_ROOT
+from agent.import_extractor import (
+    apply_import_items,
+    extract_from_image,
+    extract_from_pdf,
+    extract_from_text,
+)
 from agent.logger import RunLogger
 from agent.responder import Responder
 
@@ -125,15 +136,23 @@ class Handler(BaseHTTPRequestHandler):
         if not self._require_auth():
             return
 
-        if self.path != "/chat":
+        if self.path == "/chat":
+            self._handle_chat()
+        elif self.path == "/upload":
+            self._handle_upload()
+        elif self.path == "/import/confirm":
+            self._handle_import_confirm()
+        else:
             self._send_json({"error": "not found"}, status=404)
-            return
 
+    def _read_json_body(self):
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length) if length else b"{}"
+        return json.loads(raw)
 
+    def _handle_chat(self):
         try:
-            body = json.loads(raw)
+            body = self._read_json_body()
         except json.JSONDecodeError:
             self._send_json({"error": "invalid JSON body"}, status=400)
             return
@@ -167,6 +186,82 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send_json({"reply": reply, "status": status})
 
+    def _handle_upload(self):
+        """
+        Reads a file (text/CSV, PDF, or photo) and extracts candidate
+        inventory actions from it -- does NOT write anything to
+        inventory.db. See agent/import_extractor.py. The owner reviews
+        the returned items in the web UI and POSTs them to
+        /import/confirm to actually apply them.
+        """
+        try:
+            body = self._read_json_body()
+        except json.JSONDecodeError:
+            self._send_json({"error": "invalid JSON body"}, status=400)
+            return
+
+        filename = (body.get("filename") or "").lower()
+        mime_type = body.get("mime_type") or ""
+        content_b64 = body.get("content_base64") or ""
+
+        if not content_b64:
+            self._send_json({"error": "missing 'content_base64'"}, status=400)
+            return
+
+        try:
+            raw_bytes = base64.b64decode(content_b64)
+        except Exception:
+            self._send_json({"error": "invalid base64 content"}, status=400)
+            return
+
+        try:
+            if filename.endswith(".pdf") or mime_type == "application/pdf":
+                result = extract_from_pdf(raw_bytes)
+            elif mime_type.startswith("image/") or filename.endswith(
+                (".jpg", ".jpeg", ".png", ".webp", ".heic")
+            ):
+                result = extract_from_image(raw_bytes, mime_type or "image/jpeg")
+            else:
+                # Plain text/CSV -- anything else falls through here too,
+                # which just means the model sees raw bytes decoded as
+                # text and likely returns an empty/explained result
+                # rather than crashing.
+                text = raw_bytes.decode("utf-8", errors="replace")
+                result = extract_from_text(text)
+        except Exception as exc:
+            self._send_json({"error": f"Couldn't read that file: {exc}"}, status=500)
+            return
+
+        self._send_json(result)
+
+    def _handle_import_confirm(self):
+        """
+        Actually applies a list of extracted items (as returned by
+        /upload, after the owner has reviewed/confirmed them in the web
+        UI) -- the only place in the import flow that writes real
+        inventory data.
+        """
+        try:
+            body = self._read_json_body()
+        except json.JSONDecodeError:
+            self._send_json({"error": "invalid JSON body"}, status=400)
+            return
+
+        items = body.get("items")
+
+        if not isinstance(items, list) or not items:
+            self._send_json({"error": "missing/empty 'items' list"}, status=400)
+            return
+
+        run_logger = RunLogger("[bulk import confirm]")
+        responder.tool_manager.set_logger(run_logger)
+
+        results = apply_import_items(items, responder.tool_manager)
+
+        run_logger.finalize("completed")
+
+        self._send_json({"results": results})
+
     def do_DELETE(self):
         if not self._require_auth():
             return
@@ -199,6 +294,8 @@ def main():
     print(f"Inventory agent listening on http://{HOST}:{PORT}")
     print(f"LLM provider: {LLM_PROVIDER} (model: {DEFAULT_MODEL})")
     print('POST /chat {"message": "..."} -> {"reply": "...", "status": "..."}')
+    print('POST /upload {"filename", "mime_type", "content_base64"} -> extracted items (no writes)')
+    print('POST /import/confirm {"items": [...]} -> applies them, returns per-item results')
     print("DELETE /history -> clears conversation history")
     print("AGENT_AUTO_APPROVE=" + os.environ.get("AGENT_AUTO_APPROVE", "0"))
 

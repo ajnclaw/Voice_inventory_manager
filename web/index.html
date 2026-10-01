@@ -91,6 +91,98 @@
     100% { box-shadow: 0 0 0 0 rgba(224, 82, 82, 0); }
   }
 
+  #attach-btn {
+    border: none;
+    border-radius: 50%;
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    background: #2a2e37;
+    color: var(--text);
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Bulk-import preview overlay */
+  #import-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    z-index: 10;
+  }
+
+  #import-card {
+    width: 100%;
+    max-width: 480px;
+    max-height: 80vh;
+    background: var(--panel);
+    border-radius: 16px 16px 0 0;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  #import-card h2 {
+    margin: 0;
+    font-size: 16px;
+  }
+
+  #import-summary {
+    color: var(--text-dim);
+    font-size: 14px;
+    margin: 0;
+  }
+
+  #import-items {
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .import-item {
+    background: #2a2e37;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 14px;
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .import-item .action-tag {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    flex-shrink: 0;
+  }
+
+  .import-item.result-success { border-left: 3px solid #4caf50; }
+  .import-item.result-failed { border-left: 3px solid var(--error); }
+
+  #import-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  #import-actions button {
+    flex: 1;
+    padding: 12px;
+    border-radius: 10px;
+    border: none;
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  #import-confirm-btn { background: var(--accent); color: white; }
+  #import-cancel-btn { background: #2a2e37; color: var(--text); }
+
   #messages {
     flex: 1;
     overflow-y: auto;
@@ -244,9 +336,26 @@
   <div id="chat" class="hidden" style="display: contents;">
     <div id="messages"></div>
     <div id="composer">
+      <button id="attach-btn" title="Import from file/photo">📎</button>
+      <input id="file-input" type="file" accept=".txt,.csv,.pdf,image/*" capture="environment" class="hidden">
       <button id="mic-btn" title="Voice input">🎤</button>
       <input id="text-input" type="text" placeholder="Type a message..." autocomplete="off">
       <button id="send-btn">Send</button>
+    </div>
+  </div>
+
+  <!-- Bulk-import preview: shown after /upload extracts candidate
+       items, until the owner confirms or cancels. Nothing in here has
+       touched inventory.db yet. -->
+  <div id="import-overlay" class="hidden">
+    <div id="import-card">
+      <h2>Review before saving</h2>
+      <p id="import-summary"></p>
+      <div id="import-items"></div>
+      <div id="import-actions">
+        <button id="import-cancel-btn">Cancel</button>
+        <button id="import-confirm-btn">Confirm &amp; Save</button>
+      </div>
     </div>
   </div>
 </div>
@@ -269,6 +378,13 @@
   const tokenInput = document.getElementById("token-input");
   const tokenSave = document.getElementById("token-save");
   const setupError = document.getElementById("setup-error");
+  const attachBtn = document.getElementById("attach-btn");
+  const fileInput = document.getElementById("file-input");
+  const importOverlay = document.getElementById("import-overlay");
+  const importSummary = document.getElementById("import-summary");
+  const importItemsEl = document.getElementById("import-items");
+  const importCancelBtn = document.getElementById("import-cancel-btn");
+  const importConfirmBtn = document.getElementById("import-confirm-btn");
 
   function getToken() {
     return localStorage.getItem(TOKEN_KEY) || "";
@@ -475,6 +591,198 @@
 
   tokenInput.addEventListener("keydown", function (e) {
     if (e.key === "Enter") tokenSave.click();
+  });
+
+  // ---- Bulk import: attach a text/CSV file, a PDF, or a photo of a
+  // handwritten note. The server (agent/import_extractor.py) reads it
+  // and extracts candidate items WITHOUT writing anything yet -- this
+  // shows the preview and only applies it once the owner confirms, so
+  // a bad OCR/handwriting read can't silently corrupt real stock
+  // counts. capture="environment" on the file input (see the HTML) is
+  // what lets a phone offer "take photo" directly, not just "choose
+  // existing file".
+
+  const ACTION_LABELS = {
+    restock: "+ Restock",
+    sale: "- Sale",
+    adjustment: "~ Adjust",
+    new_item: "* New item",
+  };
+
+  let pendingItems = [];
+
+  function fileToBase64(file) {
+    return new Promise(function (resolve, reject) {
+      const reader = new FileReader();
+
+      reader.onload = function () {
+        // reader.result is "data:<mime>;base64,<data>" -- strip the
+        // prefix, the server only wants the base64 payload itself.
+        const result = reader.result;
+        const commaIndex = result.indexOf(",");
+        resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
+      };
+
+      reader.onerror = function () {
+        reject(new Error("Couldn't read that file."));
+      };
+
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function describeItem(entry) {
+    const label = ACTION_LABELS[entry.action] || entry.action;
+    let line = `${label}: ${entry.item}`;
+
+    if (entry.action === "adjustment") {
+      // quantity is a CHANGE here (negative = lost/damaged, positive =
+      // found extra), not a final count -- show the sign explicitly
+      // so it doesn't read like an absolute total.
+      if (entry.quantity != null) {
+        const sign = entry.quantity > 0 ? "+" : "";
+        line += ` (${sign}${entry.quantity})`;
+      }
+    } else if (entry.quantity != null) {
+      line += ` x${entry.quantity}`;
+    }
+
+    if (entry.unit_price != null) line += ` @ Rs${entry.unit_price}`;
+    if (entry.action === "adjustment" && entry.reason) line += ` -- ${entry.reason}`;
+
+    return line;
+  }
+
+  function renderImportPreview(data) {
+    pendingItems = Array.isArray(data.items) ? data.items : [];
+
+    importSummary.textContent = data.summary || "";
+    importItemsEl.innerHTML = "";
+
+    if (pendingItems.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "import-item";
+      empty.textContent = "Nothing usable was found in that file.";
+      importItemsEl.appendChild(empty);
+      importConfirmBtn.disabled = true;
+    } else {
+      importConfirmBtn.disabled = false;
+
+      pendingItems.forEach(function (entry) {
+        const row = document.createElement("div");
+        row.className = "import-item";
+        row.textContent = describeItem(entry);
+        importItemsEl.appendChild(row);
+      });
+    }
+
+    importConfirmBtn.textContent = "Confirm & Save";
+    importConfirmBtn.disabled = pendingItems.length === 0;
+    importCancelBtn.textContent = "Cancel";
+    importOverlay.classList.remove("hidden");
+  }
+
+  function closeImportOverlay() {
+    importOverlay.classList.add("hidden");
+    pendingItems = [];
+    fileInput.value = "";
+  }
+
+  function renderImportResults(results) {
+    const rows = importItemsEl.children;
+
+    results.forEach(function (result, index) {
+      const row = rows[index];
+
+      if (!row) return;
+
+      row.classList.add(result.success ? "result-success" : "result-failed");
+
+      if (!result.success && result.error) {
+        row.textContent += " -- FAILED: " + result.error;
+      }
+    });
+
+    const successCount = results.filter(function (r) { return r.success; }).length;
+
+    importSummary.textContent =
+      `Saved ${successCount} of ${results.length} item(s).`;
+
+    importConfirmBtn.textContent = "Close";
+    importConfirmBtn.disabled = false;
+    importCancelBtn.classList.add("hidden");
+
+    // Also drop a one-line record into the main chat log, consistent
+    // with how a normal chat-based sale/restock gets confirmed.
+    addMessage(
+      "assistant",
+      `Bulk import: saved ${successCount} of ${results.length} item(s).`
+    );
+  }
+
+  attachBtn.addEventListener("click", function () {
+    fileInput.click();
+  });
+
+  fileInput.addEventListener("change", async function () {
+    const file = fileInput.files[0];
+
+    if (!file) return;
+
+    addMessage("user", `[attached: ${file.name}]`);
+    const pending = addMessage("assistant pending", "Reading file...");
+
+    try {
+      const contentBase64 = await fileToBase64(file);
+
+      const data = await callApi("/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: file.name,
+          mime_type: file.type,
+          content_base64: contentBase64,
+        }),
+      });
+
+      pending.remove();
+      renderImportPreview(data);
+    } catch (err) {
+      pending.remove();
+
+      if (err.message !== "unauthorized") {
+        addMessage("error", "Couldn't read that file: " + err.message);
+      }
+    }
+  });
+
+  importCancelBtn.addEventListener("click", closeImportOverlay);
+
+  importConfirmBtn.addEventListener("click", async function () {
+    // Second click, after results are already shown, just closes it.
+    if (importConfirmBtn.textContent === "Close") {
+      closeImportOverlay();
+      return;
+    }
+
+    importConfirmBtn.disabled = true;
+    importCancelBtn.disabled = true;
+
+    try {
+      const data = await callApi("/import/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: pendingItems }),
+      });
+
+      renderImportResults(data.results || []);
+    } catch (err) {
+      if (err.message !== "unauthorized") {
+        addMessage("error", "Couldn't save the import: " + err.message);
+      }
+    } finally {
+      importCancelBtn.disabled = false;
+    }
   });
 
   // On load: if a token is already stored, go straight to chat --

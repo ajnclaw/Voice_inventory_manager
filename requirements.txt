@@ -1,6 +1,6 @@
-# Intentionally empty: this project uses only the Python standard
-# library (sqlite3, http.server, json, urllib, logging, datetime, uuid).
-# No GPU, no local models, no third-party packages at all -- the LLM
-# call itself goes to a hosted provider (OpenRouter/DeepSeek/Ollama's
-# API), not something running locally. This is deliberate: it's what
-# makes this project cheap and simple to host on any small VPS.
+# Was stdlib-only until bulk import (PDF/photo/text upload) needed PDF
+# text extraction and page-to-image rendering for scanned PDFs. Still
+# no GPU, no local model -- image/handwriting reading goes through the
+# same hosted LLM (gpt-4o-mini is multimodal) already used for chat,
+# not a separate OCR engine.
+PyMuPDF>=1.24.0

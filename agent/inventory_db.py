@@ -148,13 +148,25 @@ def add_item(
 
 
 def search_items(query):
-    query_like = f"%{query.lower()}%"
+    """
+    Matches in both directions: the stored name containing the query
+    (the original behavior -- query "filter" finds "oil filter") AND
+    the query containing the stored name (query "oil filters" finds
+    "oil filter", since "oil filter" is a substring of "oil filters").
+    Without the second direction, a plain plural/singular mismatch --
+    exactly the kind of thing a bulk-import extraction or a slightly
+    different spoken phrasing produces constantly -- fails to match
+    anything at all even though the item obviously exists.
+    """
+    query_lower = query.lower()
+    query_like = f"%{query_lower}%"
 
     with _connect() as conn:
         rows = conn.execute(
             "SELECT * FROM items WHERE lower(name) LIKE ? OR lower(category) LIKE ? "
+            "OR ? LIKE '%' || lower(name) || '%' "
             "ORDER BY name",
-            (query_like, query_like),
+            (query_like, query_like, query_lower),
         ).fetchall()
 
     return [_item_row_to_dict(row) for row in rows]
