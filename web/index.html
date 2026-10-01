@@ -325,7 +325,11 @@
     window.speechSynthesis.cancel();
 
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "en-IN";
+    // hi-IN rather than en-IN: replies are Hinglish (Hindi-English
+    // code-mixed), and a Hindi voice generally handles common English
+    // loanwords better than an English voice handles Hindi words --
+    // there's no dedicated "Hinglish" voice/lang tag to pick from.
+    utterance.lang = "hi-IN";
     window.speechSynthesis.speak(utterance);
   }
 
