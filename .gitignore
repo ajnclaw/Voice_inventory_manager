@@ -1,0 +1,16 @@
+# Virtual environment
+.venv/
+
+# Python bytecode / cache
+__pycache__/
+*.pyc
+
+# Real inventory data -- this is the shop's actual business records,
+# never belongs in git history.
+inventory.db
+
+# Structured run traces (see agent/logger.py) -- regenerated, not source.
+logs/
+
+# Local secrets -- never commit
+.env
