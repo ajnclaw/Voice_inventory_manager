@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Shop Inventory Assistant</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #1a1d24;
+    --bubble-user: #2d6cdf;
+    --bubble-assistant: #262a33;
+    --text: #e8eaed;
+    --text-dim: #9aa0a6;
+    --accent: #2d6cdf;
+    --error: #e05252;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  #app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+
+  header {
+    padding: 14px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid #2a2e37;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  header h1 {
+    font-size: 16px;
+    margin: 0;
+    font-weight: 600;
+  }
+
+  header button {
+    background: none;
+    border: 1px solid #3a3f4b;
+    color: var(--text-dim);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  header .header-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  #mute-btn.muted {
+    color: var(--error);
+    border-color: var(--error);
+  }
+
+  #mic-btn {
+    border: none;
+    border-radius: 50%;
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    background: #2a2e37;
+    color: var(--text);
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #mic-btn.listening {
+    background: var(--error);
+    animation: pulse 1.2s infinite;
+  }
+
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(224, 82, 82, 0.5); }
+    70% { box-shadow: 0 0 0 10px rgba(224, 82, 82, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(224, 82, 82, 0); }
+  }
+
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .msg {
+    max-width: 82%;
+    padding: 10px 14px;
+    border-radius: 14px;
+    line-height: 1.4;
+    font-size: 15px;
+    white-space: pre-wrap;
+  }
+
+  .msg.user {
+    align-self: flex-end;
+    background: var(--bubble-user);
+    color: white;
+    border-bottom-right-radius: 4px;
+  }
+
+  .msg.assistant {
+    align-self: flex-start;
+    background: var(--bubble-assistant);
+    border-bottom-left-radius: 4px;
+  }
+
+  .msg.error {
+    align-self: flex-start;
+    background: transparent;
+    color: var(--error);
+    font-size: 13px;
+  }
+
+  .msg.pending {
+    opacity: 0.5;
+  }
+
+  #composer {
+    display: flex;
+    gap: 8px;
+    padding: 12px;
+    background: var(--panel);
+    border-top: 1px solid #2a2e37;
+  }
+
+  #composer input {
+    flex: 1;
+    border: none;
+    border-radius: 20px;
+    padding: 12px 16px;
+    background: #2a2e37;
+    color: var(--text);
+    font-size: 15px;
+  }
+
+  #composer input:focus {
+    outline: 2px solid var(--accent);
+  }
+
+  #composer button {
+    border: none;
+    border-radius: 20px;
+    padding: 0 18px;
+    background: var(--accent);
+    color: white;
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  #composer button:disabled {
+    opacity: 0.5;
+  }
+
+  /* One-time token setup screen */
+  #setup {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 24px;
+    gap: 14px;
+    text-align: center;
+  }
+
+  #setup p {
+    color: var(--text-dim);
+    font-size: 14px;
+    max-width: 320px;
+    margin: 0;
+  }
+
+  #setup input {
+    width: 100%;
+    max-width: 320px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid #3a3f4b;
+    background: #2a2e37;
+    color: var(--text);
+    font-size: 15px;
+  }
+
+  #setup button {
+    width: 100%;
+    max-width: 320px;
+    padding: 12px;
+    border-radius: 10px;
+    border: none;
+    background: var(--accent);
+    color: white;
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  #setup-error {
+    color: var(--error);
+    font-size: 13px;
+    min-height: 16px;
+  }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <header>
+    <h1>Shop Inventory</h1>
+    <div class="header-actions">
+      <button id="mute-btn" title="Toggle spoken replies">🔊</button>
+      <button id="clear-btn">Clear chat</button>
+    </div>
+  </header>
+
+  <!-- Shown once, until a working token is stored in this browser -->
+  <div id="setup">
+    <p>Enter the access token for this shop's inventory server. You only
+       need to do this once on this device.</p>
+    <input id="token-input" type="password" placeholder="Access token" autocomplete="off">
+    <button id="token-save">Save and connect</button>
+    <div id="setup-error"></div>
+  </div>
+
+  <!-- Main chat UI, hidden until a token is set -->
+  <div id="chat" class="hidden" style="display: contents;">
+    <div id="messages"></div>
+    <div id="composer">
+      <button id="mic-btn" title="Voice input">🎤</button>
+      <input id="text-input" type="text" placeholder="Type a message..." autocomplete="off">
+      <button id="send-btn">Send</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const TOKEN_KEY = "agent_token";
+  const MUTE_KEY = "agent_tts_muted";
+
+  const setupEl = document.getElementById("setup");
+  const chatEl = document.getElementById("chat");
+  const messagesEl = document.getElementById("messages");
+  const textInput = document.getElementById("text-input");
+  const sendBtn = document.getElementById("send-btn");
+  const clearBtn = document.getElementById("clear-btn");
+  const micBtn = document.getElementById("mic-btn");
+  const muteBtn = document.getElementById("mute-btn");
+  const tokenInput = document.getElementById("token-input");
+  const tokenSave = document.getElementById("token-save");
+  const setupError = document.getElementById("setup-error");
+
+  function getToken() {
+    return localStorage.getItem(TOKEN_KEY) || "";
+  }
+
+  function setToken(token) {
+    localStorage.setItem(TOKEN_KEY, token);
+  }
+
+  function clearToken() {
+    localStorage.removeItem(TOKEN_KEY);
+  }
+
+  function showSetup(message) {
+    setupEl.classList.remove("hidden");
+    chatEl.classList.add("hidden");
+    setupError.textContent = message || "";
+  }
+
+  function showChat() {
+    setupEl.classList.add("hidden");
+    chatEl.classList.remove("hidden");
+    textInput.focus();
+  }
+
+  function addMessage(role, text) {
+    const el = document.createElement("div");
+    el.className = "msg " + role;
+    el.textContent = text;
+    messagesEl.appendChild(el);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return el;
+  }
+
+  // ---- Text-to-speech: reads assistant replies aloud automatically.
+  // Fully client-side (window.speechSynthesis), no server round-trip.
+  // Muted state persists per-device via localStorage.
+
+  function isMuted() {
+    return localStorage.getItem(MUTE_KEY) === "1";
+  }
+
+  function setMuted(muted) {
+    localStorage.setItem(MUTE_KEY, muted ? "1" : "0");
+    muteBtn.textContent = muted ? "🔇" : "🔊";
+    muteBtn.classList.toggle("muted", muted);
+  }
+
+  function speak(text) {
+    if (isMuted() || !("speechSynthesis" in window) || !text) return;
+
+    // Cancel anything still being read so replies don't overlap if the
+    // owner sends messages faster than the previous reply finishes.
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "en-IN";
+    window.speechSynthesis.speak(utterance);
+  }
+
+  muteBtn.addEventListener("click", function () {
+    setMuted(!isMuted());
+  });
+
+  setMuted(isMuted());
+
+  // ---- Speech-to-text: tap the mic, speak, it fills the input and
+  // sends automatically once recognition finishes. Chrome on Android
+  // (the default browser) supports this via webkitSpeechRecognition;
+  // other browsers may not -- the mic button just hides itself if the
+  // API isn't available, same page works fine with typing either way.
+
+  const SpeechRecognitionApi = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recognizer = null;
+  let listening = false;
+
+  if (!SpeechRecognitionApi) {
+    micBtn.style.display = "none";
+  } else {
+    recognizer = new SpeechRecognitionApi();
+    recognizer.lang = "en-IN";
+    recognizer.interimResults = false;
+    recognizer.continuous = false;
+
+    recognizer.onresult = function (event) {
+      const transcript = event.results[0][0].transcript;
+      textInput.value = transcript;
+      sendMessage();
+    };
+
+    recognizer.onerror = function (event) {
+      addMessage("error", "Voice input error: " + event.error);
+    };
+
+    recognizer.onend = function () {
+      listening = false;
+      micBtn.classList.remove("listening");
+    };
+
+    micBtn.addEventListener("click", function () {
+      if (listening) {
+        recognizer.stop();
+        return;
+      }
+
+      listening = true;
+      micBtn.classList.add("listening");
+      recognizer.start();
+    });
+  }
+
+  async function callApi(path, options) {
+    const token = getToken();
+
+    const response = await fetch(path, {
+      ...options,
+      headers: {
+        ...(options && options.headers),
+        Authorization: "Bearer " + token,
+      },
+    });
+
+    if (response.status === 401) {
+      // Stored token is wrong or stale -- don't keep silently failing on
+      // every message, force re-entry instead.
+      clearToken();
+      showSetup("That token was rejected. Enter it again.");
+      throw new Error("unauthorized");
+    }
+
+    if (!response.ok) {
+      throw new Error("Request failed: " + response.status);
+    }
+
+    return response.json();
+  }
+
+  async function sendMessage() {
+    const text = textInput.value.trim();
+
+    if (!text) return;
+
+    textInput.value = "";
+    sendBtn.disabled = true;
+
+    addMessage("user", text);
+    const pending = addMessage("assistant pending", "...");
+
+    try {
+      const data = await callApi("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text }),
+      });
+
+      pending.textContent = data.reply || "(no reply)";
+      pending.className = "msg assistant";
+      speak(data.reply);
+    } catch (err) {
+      pending.remove();
+
+      if (err.message !== "unauthorized") {
+        addMessage("error", "Couldn't reach the server: " + err.message);
+      }
+    } finally {
+      sendBtn.disabled = false;
+      textInput.focus();
+    }
+  }
+
+  async function clearConversation() {
+    try {
+      await callApi("/history", { method: "DELETE" });
+      messagesEl.innerHTML = "";
+    } catch (err) {
+      if (err.message !== "unauthorized") {
+        addMessage("error", "Couldn't clear history: " + err.message);
+      }
+    }
+  }
+
+  sendBtn.addEventListener("click", sendMessage);
+  clearBtn.addEventListener("click", clearConversation);
+
+  textInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") sendMessage();
+  });
+
+  tokenSave.addEventListener("click", function () {
+    const value = tokenInput.value.trim();
+
+    if (!value) {
+      setupError.textContent = "Paste the token first.";
+      return;
+    }
+
+    setToken(value);
+    showChat();
+  });
+
+  tokenInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") tokenSave.click();
+  });
+
+  // On load: if a token is already stored, go straight to chat --
+  // a wrong/stale one gets caught by the first 401 and bounces back
+  // to the setup screen (see callApi above).
+  if (getToken()) {
+    showChat();
+  } else {
+    showSetup();
+  }
+})();
+</script>
+
+</body>
+</html>

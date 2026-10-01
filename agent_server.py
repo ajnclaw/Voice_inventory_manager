@@ -37,9 +37,10 @@ os.environ.setdefault("AGENT_AUTO_APPROVE", "1")
 
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 from agent.compactor import compact_history
-from agent.config import AGENT_API_TOKEN, DEFAULT_MODEL, LLM_PROVIDER
+from agent.config import AGENT_API_TOKEN, DEFAULT_MODEL, LLM_PROVIDER, PROJECT_ROOT
 from agent.logger import RunLogger
 from agent.responder import Responder
 
@@ -48,6 +49,15 @@ PORT = 8766
 
 KEEP_RECENT_TURNS = 5
 COMPACT_TRIGGER_TURNS = 10
+
+# The frontend's own HTML/JS is served publicly, with no auth check --
+# a browser has to be able to load the page before it can possibly send
+# the token back on an API call, so gating the page itself would be
+# circular. The token lives only in the browser's localStorage after
+# the owner pastes it in once (see web/index.html); it is never baked
+# into this file on disk. Everything that actually touches inventory
+# data (/chat, /health, DELETE /history) still requires it.
+WEB_INDEX = (PROJECT_ROOT / "web" / "index.html").read_text(encoding="utf-8")
 
 responder = Responder()
 history = []
@@ -89,7 +99,20 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"error": "unauthorized"}, status=401)
         return False
 
+    def _send_html(self, body_text, status=200):
+        body = body_text.encode("utf-8")
+
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
+        if self.path in ("/", "/index.html"):
+            self._send_html(WEB_INDEX)
+            return
+
         if not self._require_auth():
             return
 
