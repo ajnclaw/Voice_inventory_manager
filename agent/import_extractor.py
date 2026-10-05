@@ -56,6 +56,15 @@ Rules:
 - "new_item" = this is clearly a brand-new product being added to the
   catalog with a starting quantity, not a transaction against an
   existing one.
+- A sale bill / invoice / receipt (a header like "Invoice"/"Bill", a
+  customer name, an itemized list with quantity and rate/amount
+  columns, a total) means EVERY line item on it is a "sale" -- the
+  shop sold these to that customer, stock is going OUT. Don't skip
+  bill line items just because they're in a table/column layout rather
+  than a sentence -- read quantity from the Qty column and unit_price
+  from the Rate column (not the Amount/line-total column, which is
+  quantity times rate, not the per-unit price). Ignore the "Total"
+  row itself -- it is not a separate item.
 - If the text/image is in Hinglish or Hindi, understand it the same
   way as English -- extract the item name as written, don't translate
   it into a different language.
@@ -68,7 +77,7 @@ Rules:
 """
 
 
-def _call_extraction(content):
+def _call_extraction(content, logger=None):
     response = chat(
         "import_extractor",
         DEFAULT_MODEL,
@@ -76,6 +85,7 @@ def _call_extraction(content):
             {"role": "system", "content": EXTRACT_SYSTEM_PROMPT},
             {"role": "user", "content": content},
         ],
+        logger=logger,
     )
 
     raw = response["message"]["content"] or "{}"
@@ -94,12 +104,12 @@ def _call_extraction(content):
     return data
 
 
-def extract_from_text(text):
+def extract_from_text(text, logger=None):
     prompt = "Extract inventory actions from this text:\n\n" + text
-    return _call_extraction(prompt)
+    return _call_extraction(prompt, logger=logger)
 
 
-def extract_from_image(image_bytes, mime_type="image/jpeg"):
+def extract_from_image(image_bytes, mime_type="image/jpeg", logger=None):
     b64 = base64.b64encode(image_bytes).decode("ascii")
 
     content = [
@@ -113,10 +123,10 @@ def extract_from_image(image_bytes, mime_type="image/jpeg"):
         },
     ]
 
-    return _call_extraction(content)
+    return _call_extraction(content, logger=logger)
 
 
-def extract_from_pdf(pdf_bytes):
+def extract_from_pdf(pdf_bytes, logger=None):
     import pymupdf as fitz  # lazy import so every other code path in
     # this project (the normal chat flow) doesn't pay the import cost
     # or need it installed just to run. `pymupdf` is the current import
@@ -130,7 +140,7 @@ def extract_from_pdf(pdf_bytes):
 
         # A real text-layer PDF: cheap, reliable, no vision call needed.
         if len(full_text) > 20:
-            return extract_from_text(full_text)
+            return extract_from_text(full_text, logger=logger)
 
         # No usable text layer (a scanned/photographed PDF) -- fall
         # back to reading pages as images instead, same path as a
@@ -143,7 +153,7 @@ def extract_from_pdf(pdf_bytes):
             pixmap = page.get_pixmap(dpi=150)
             image_bytes = pixmap.tobytes("png")
 
-            result = extract_from_image(image_bytes, mime_type="image/png")
+            result = extract_from_image(image_bytes, mime_type="image/png", logger=logger)
             merged["items"].extend(result.get("items", []))
 
             if result.get("summary"):

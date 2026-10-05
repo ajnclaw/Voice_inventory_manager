@@ -214,23 +214,37 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "invalid base64 content"}, status=400)
             return
 
+        run_logger = RunLogger(f"[upload: {filename or mime_type or 'unnamed file'}]")
+
         try:
             if filename.endswith(".pdf") or mime_type == "application/pdf":
-                result = extract_from_pdf(raw_bytes)
+                result = extract_from_pdf(raw_bytes, logger=run_logger)
             elif mime_type.startswith("image/") or filename.endswith(
                 (".jpg", ".jpeg", ".png", ".webp", ".heic")
             ):
-                result = extract_from_image(raw_bytes, mime_type or "image/jpeg")
+                result = extract_from_image(
+                    raw_bytes, mime_type or "image/jpeg", logger=run_logger
+                )
             else:
                 # Plain text/CSV -- anything else falls through here too,
                 # which just means the model sees raw bytes decoded as
                 # text and likely returns an empty/explained result
                 # rather than crashing.
                 text = raw_bytes.decode("utf-8", errors="replace")
-                result = extract_from_text(text)
+                result = extract_from_text(text, logger=run_logger)
         except Exception as exc:
+            run_logger.log_event(
+                "upload_failed", f"Extraction raised: {exc}", level="error"
+            )
+            run_logger.finalize("failed")
             self._send_json({"error": f"Couldn't read that file: {exc}"}, status=500)
             return
+
+        run_logger.log_event(
+            "extraction_result",
+            f"Extracted {len(result.get('items', []))} item(s): {result.get('summary', '')}",
+        )
+        run_logger.finalize("completed")
 
         self._send_json(result)
 
