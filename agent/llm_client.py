@@ -158,7 +158,13 @@ def _parse_response(raw):
         }
     )
 
-    return AttrDict({"message": message})
+    # Every OpenAI-compatible response includes token counts -- this
+    # was being silently discarded before, which meant no cost/usage
+    # tracking was possible anywhere in the codebase no matter what
+    # logger.py did with it.
+    usage = AttrDict(raw.get("usage") or {})
+
+    return AttrDict({"message": message, "usage": usage})
 
 
 def chat(component, model, messages, tools=None, logger=None):
@@ -201,6 +207,6 @@ def chat(component, model, messages, tools=None, logger=None):
     response = _parse_response(raw)
 
     if logger:
-        logger.log_llm_call(component, model, response)
+        logger.log_llm_call(component, model, response, request_messages=messages)
 
     return response

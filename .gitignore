@@ -12,5 +12,12 @@ inventory.db
 # Structured run traces (see agent/logger.py) -- regenerated, not source.
 logs/
 
+# Saved conversation log and cumulative LLM usage/cost -- real runtime
+# data (see agent/transcript_log.py, agent/usage_tracker.py), same
+# treatment as inventory.db. Back these up separately if you want the
+# history kept; they're not meant to live in git.
+transcripts.jsonl
+usage.db
+
 # Local secrets -- never commit
 .env

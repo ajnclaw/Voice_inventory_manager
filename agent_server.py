@@ -55,6 +55,8 @@ from agent.import_extractor import (
 from agent.inventory_db import inventory_overview
 from agent.logger import RunLogger
 from agent.responder import Responder
+from agent.transcript_log import append_turn, read_all as read_transcript
+from agent import usage_tracker
 
 HOST = "0.0.0.0"
 PORT = 8766
@@ -144,6 +146,17 @@ class Handler(BaseHTTPRequestHandler):
             # than hoping a chat reply formats a long list nicely, and
             # it's free (no LLM call) and always exactly up to date.
             self._send_json(inventory_overview())
+        elif self.path == "/usage":
+            # Cumulative LLM spend across this deployment's whole
+            # lifetime (persisted in usage.db, survives restarts) --
+            # see agent/usage_tracker.py. Numbers are an estimate from
+            # a local pricing table, not pulled live from the provider.
+            self._send_json(usage_tracker.totals())
+        elif self.path == "/transcript":
+            # The continuous saved conversation log -- see
+            # agent/transcript_log.py. Every /chat and /upload turn,
+            # in order, with model/tokens/cost per turn.
+            self._send_json({"turns": read_transcript()})
         else:
             self._send_json({"error": "not found"}, status=404)
 
@@ -192,11 +205,27 @@ class Handler(BaseHTTPRequestHandler):
 
         run_logger.finalize(status)
 
+        # The continuous, human-readable conversation record (separate
+        # from the detailed per-request trace run_logger just wrote) --
+        # see transcript_log.py. A turn can involve more than one LLM
+        # call (tool-calling loop iterations), so these are the run's
+        # summed totals, not a single call's.
+        append_turn(
+            user_input,
+            reply,
+            status,
+            DEFAULT_MODEL,
+            run_logger.trace["total_prompt_tokens"],
+            run_logger.trace["total_completion_tokens"],
+            run_logger.trace["total_cost_usd"],
+        )
+
         history.append({"user_input": user_input, "reply": reply})
         history = compact_history(
             history,
             keep_recent=KEEP_RECENT_TURNS,
             trigger_at=COMPACT_TRIGGER_TURNS,
+            logger=run_logger,
         )
 
         self._send_json({"reply": reply, "status": status})
@@ -266,6 +295,16 @@ class Handler(BaseHTTPRequestHandler):
         )
         run_logger.finalize("completed")
 
+        append_turn(
+            f"[upload: {filename or mime_type or 'unnamed file'}]",
+            result.get("summary", ""),
+            "completed",
+            DEFAULT_MODEL,
+            run_logger.trace["total_prompt_tokens"],
+            run_logger.trace["total_completion_tokens"],
+            run_logger.trace["total_cost_usd"],
+        )
+
         self._send_json(result)
 
     def _handle_import_confirm(self):
@@ -331,6 +370,8 @@ def main():
     print('POST /upload {"filename", "mime_type", "content_base64", "hint"?} -> extracted items (no writes)')
     print('POST /import/confirm {"items": [...]} -> applies them, returns per-item results')
     print("GET /inventory -> full catalog + summary totals (table view)")
+    print("GET /usage -> cumulative LLM calls/tokens/estimated cost, all time")
+    print("GET /transcript -> saved conversation log (every /chat and /upload turn)")
     print("DELETE /history -> clears conversation history")
     print("AGENT_AUTO_APPROVE=" + os.environ.get("AGENT_AUTO_APPROVE", "0"))
 

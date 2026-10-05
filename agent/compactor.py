@@ -32,7 +32,7 @@ def build_transcript(turns):
     return "\n".join(lines)
 
 
-def summarize_transcript(transcript, model=DEFAULT_MODEL):
+def summarize_transcript(transcript, model=DEFAULT_MODEL, logger=None):
     response = chat(
         "compactor",
         model,
@@ -40,12 +40,13 @@ def summarize_transcript(transcript, model=DEFAULT_MODEL):
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": transcript},
         ],
+        logger=logger,
     )
 
     return response["message"]["content"]
 
 
-def compact_history(history, keep_recent=5, trigger_at=10, model=DEFAULT_MODEL):
+def compact_history(history, keep_recent=5, trigger_at=10, model=DEFAULT_MODEL, logger=None):
     """
     Once there are more than trigger_at raw (non-summary) turns,
     summarize everything except the most recent keep_recent into a
@@ -71,6 +72,6 @@ def compact_history(history, keep_recent=5, trigger_at=10, model=DEFAULT_MODEL):
     transcript_parts += [build_transcript([turn]) for turn in to_compact]
 
     transcript = "\n".join(transcript_parts)
-    summary = summarize_transcript(transcript, model=model)
+    summary = summarize_transcript(transcript, model=model, logger=logger)
 
     return [{"summary": summary}] + recent
