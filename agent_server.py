@@ -117,6 +117,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        # Without this, mobile Chrome has repeatedly served a stale
+        # cached copy of this page after a real update on the server --
+        # confirmed twice during development. This is a single-owner
+        # tool mid-active-development, not a high-traffic site; the
+        # cost of never caching the page is irrelevant next to the
+        # cost of the owner not seeing a fix that's actually live.
+        self.send_header("Cache-Control", "no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
         self.end_headers()
         self.wfile.write(body)
 
