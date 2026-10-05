@@ -105,6 +105,49 @@
     justify-content: center;
   }
 
+  /* Buy/Sale hint chooser -- shown right after tapping attach */
+  #hint-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    z-index: 11;
+  }
+
+  #hint-card {
+    width: 100%;
+    max-width: 480px;
+    background: var(--panel);
+    border-radius: 16px 16px 0 0;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  #hint-card h2 {
+    margin: 0 0 4px;
+    font-size: 16px;
+  }
+
+  .hint-option {
+    width: 100%;
+    padding: 14px;
+    border-radius: 10px;
+    border: none;
+    background: #2a2e37;
+    color: var(--text);
+    font-size: 15px;
+    text-align: left;
+  }
+
+  .hint-option.secondary {
+    color: var(--text-dim);
+    text-align: center;
+  }
+
   /* Bulk-import preview overlay */
   #import-overlay {
     position: fixed;
@@ -344,6 +387,22 @@
     </div>
   </div>
 
+  <!-- Shown right after tapping attach, before the file picker opens.
+       Telling the extractor upfront whether this is a purchase or a
+       sale removes the hardest part of its job -- a buy bill and a
+       sale bill can look structurally identical, so this is strictly
+       better information than anything it could infer from the file
+       itself. -->
+  <div id="hint-overlay" class="hidden">
+    <div id="hint-card">
+      <h2>What kind of bill is this?</h2>
+      <button id="hint-buy-btn" class="hint-option">📥 Purchase bill (stock coming in)</button>
+      <button id="hint-sale-btn" class="hint-option">📤 Sale bill (stock going out)</button>
+      <button id="hint-auto-btn" class="hint-option">✨ Not sure -- let it figure it out</button>
+      <button id="hint-cancel-btn" class="hint-option secondary">Cancel</button>
+    </div>
+  </div>
+
   <!-- Bulk-import preview: shown after /upload extracts candidate
        items, until the owner confirms or cancels. Nothing in here has
        touched inventory.db yet. -->
@@ -385,6 +444,11 @@
   const importItemsEl = document.getElementById("import-items");
   const importCancelBtn = document.getElementById("import-cancel-btn");
   const importConfirmBtn = document.getElementById("import-confirm-btn");
+  const hintOverlay = document.getElementById("hint-overlay");
+  const hintBuyBtn = document.getElementById("hint-buy-btn");
+  const hintSaleBtn = document.getElementById("hint-sale-btn");
+  const hintAutoBtn = document.getElementById("hint-auto-btn");
+  const hintCancelBtn = document.getElementById("hint-cancel-btn");
 
   function getToken() {
     return localStorage.getItem(TOKEN_KEY) || "";
@@ -720,16 +784,38 @@
     );
   }
 
-  attachBtn.addEventListener("click", function () {
+  let pendingHint = null; // "buy" | "sale" | null (null = let the model decide)
+
+  function openHintChooser() {
+    hintOverlay.classList.remove("hidden");
+  }
+
+  function closeHintChooser() {
+    hintOverlay.classList.add("hidden");
+  }
+
+  function chooseHintAndPickFile(hint) {
+    pendingHint = hint;
+    closeHintChooser();
     fileInput.click();
-  });
+  }
+
+  attachBtn.addEventListener("click", openHintChooser);
+  hintCancelBtn.addEventListener("click", closeHintChooser);
+  hintBuyBtn.addEventListener("click", function () { chooseHintAndPickFile("buy"); });
+  hintSaleBtn.addEventListener("click", function () { chooseHintAndPickFile("sale"); });
+  hintAutoBtn.addEventListener("click", function () { chooseHintAndPickFile(null); });
 
   fileInput.addEventListener("change", async function () {
     const file = fileInput.files[0];
 
     if (!file) return;
 
-    addMessage("user", `[attached: ${file.name}]`);
+    const hintLabel =
+      pendingHint === "buy" ? " (marked as purchase)" :
+      pendingHint === "sale" ? " (marked as sale)" : "";
+
+    addMessage("user", `[attached: ${file.name}]${hintLabel}`);
     const pending = addMessage("assistant pending", "Reading file...");
 
     try {
@@ -742,6 +828,7 @@
           filename: file.name,
           mime_type: file.type,
           content_base64: contentBase64,
+          hint: pendingHint,
         }),
       });
 
@@ -753,6 +840,8 @@
       if (err.message !== "unauthorized") {
         addMessage("error", "Couldn't read that file: " + err.message);
       }
+    } finally {
+      pendingHint = null;
     }
   });
 

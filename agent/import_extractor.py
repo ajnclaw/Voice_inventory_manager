@@ -22,6 +22,29 @@ from .config import DEFAULT_MODEL
 from .llm_client import chat
 from . import inventory_db
 
+# If the owner tells the UI upfront whether an upload is a purchase
+# bill or a sale bill, that's strictly better information than anything
+# the model could infer from the document itself (a buy bill and a
+# sale bill can look structurally identical -- same item/qty/rate/
+# amount table -- the only real signal is who the shop is in the
+# transaction, which is exactly the kind of thing OCR/vision can get
+# wrong on a real photo). When given, this overrides the model's own
+# judgment entirely rather than just being a suggestion.
+HINT_INSTRUCTIONS = {
+    "buy": (
+        "The owner has confirmed this document is a PURCHASE/supplier "
+        "bill -- stock coming IN to the shop. Treat EVERY item on it "
+        "as action='restock', regardless of any other wording or "
+        "layout in the document."
+    ),
+    "sale": (
+        "The owner has confirmed this document is a SALE bill/invoice "
+        "to a customer -- stock going OUT of the shop. Treat EVERY "
+        "item on it as action='sale', regardless of any other wording "
+        "or layout in the document."
+    ),
+}
+
 EXTRACT_SYSTEM_PROMPT = """
 You are reading a shop owner's note, file, or photo to find inventory
 actions to extract -- sales, restocks, corrections, or new items.
@@ -77,12 +100,19 @@ Rules:
 """
 
 
-def _call_extraction(content, logger=None):
+def _call_extraction(content, logger=None, hint=None):
+    system_content = EXTRACT_SYSTEM_PROMPT
+
+    hint_instruction = HINT_INSTRUCTIONS.get(hint)
+
+    if hint_instruction:
+        system_content += "\n\nIMPORTANT, overrides anything above:\n" + hint_instruction
+
     response = chat(
         "import_extractor",
         DEFAULT_MODEL,
         [
-            {"role": "system", "content": EXTRACT_SYSTEM_PROMPT},
+            {"role": "system", "content": system_content},
             {"role": "user", "content": content},
         ],
         logger=logger,
@@ -104,12 +134,12 @@ def _call_extraction(content, logger=None):
     return data
 
 
-def extract_from_text(text, logger=None):
+def extract_from_text(text, logger=None, hint=None):
     prompt = "Extract inventory actions from this text:\n\n" + text
-    return _call_extraction(prompt, logger=logger)
+    return _call_extraction(prompt, logger=logger, hint=hint)
 
 
-def extract_from_image(image_bytes, mime_type="image/jpeg", logger=None):
+def extract_from_image(image_bytes, mime_type="image/jpeg", logger=None, hint=None):
     b64 = base64.b64encode(image_bytes).decode("ascii")
 
     content = [
@@ -123,10 +153,10 @@ def extract_from_image(image_bytes, mime_type="image/jpeg", logger=None):
         },
     ]
 
-    return _call_extraction(content, logger=logger)
+    return _call_extraction(content, logger=logger, hint=hint)
 
 
-def extract_from_pdf(pdf_bytes, logger=None):
+def extract_from_pdf(pdf_bytes, logger=None, hint=None):
     import pymupdf as fitz  # lazy import so every other code path in
     # this project (the normal chat flow) doesn't pay the import cost
     # or need it installed just to run. `pymupdf` is the current import
@@ -140,7 +170,7 @@ def extract_from_pdf(pdf_bytes, logger=None):
 
         # A real text-layer PDF: cheap, reliable, no vision call needed.
         if len(full_text) > 20:
-            return extract_from_text(full_text, logger=logger)
+            return extract_from_text(full_text, logger=logger, hint=hint)
 
         # No usable text layer (a scanned/photographed PDF) -- fall
         # back to reading pages as images instead, same path as a
@@ -153,7 +183,9 @@ def extract_from_pdf(pdf_bytes, logger=None):
             pixmap = page.get_pixmap(dpi=150)
             image_bytes = pixmap.tobytes("png")
 
-            result = extract_from_image(image_bytes, mime_type="image/png", logger=logger)
+            result = extract_from_image(
+                image_bytes, mime_type="image/png", logger=logger, hint=hint
+            )
             merged["items"].extend(result.get("items", []))
 
             if result.get("summary"):
@@ -204,8 +236,27 @@ def apply_import_items(items, tool_manager):
                 item_name = matches[0]["name"]
                 current_quantity = matches[0]["current_quantity"]
 
+        not_found_message = (
+            f"'{item_name}' isn't in your catalog yet. Add it first "
+            f"(e.g. say \"add {item_name}, starting stock X\" in chat), "
+            f"then re-import this line."
+        )
+
         try:
             if action == "restock":
+                # Unlike a sale or adjustment, a restock against an
+                # unknown item is completely ordinary -- "received your
+                # first-ever shipment of something new" -- there's no
+                # existing stock level it needs to reconcile against,
+                # so auto-create it rather than failing. This is exactly
+                # the situation bootstrapping a catalog from real bills
+                # hits constantly.
+                if current_quantity is None:
+                    tool_manager.execute(
+                        "add_item",
+                        {"name": item_name, "initial_quantity": 0},
+                    )
+
                 tool_result = tool_manager.execute(
                     "record_restock",
                     {
@@ -216,15 +267,22 @@ def apply_import_items(items, tool_manager):
                     },
                 )
             elif action == "sale":
-                tool_result = tool_manager.execute(
-                    "record_sale",
-                    {
-                        "item": item_name,
-                        "quantity": quantity,
-                        "unit_price": unit_price,
-                        "note": "Bulk import",
-                    },
-                )
+                if current_quantity is None:
+                    # A sale against an item that was never added can't
+                    # be applied safely -- there's no stock on record to
+                    # sell from, and guessing a starting quantity would
+                    # be inventing data, not reading it.
+                    tool_result = {"success": False, "error": not_found_message}
+                else:
+                    tool_result = tool_manager.execute(
+                        "record_sale",
+                        {
+                            "item": item_name,
+                            "quantity": quantity,
+                            "unit_price": unit_price,
+                            "note": "Bulk import",
+                        },
+                    )
             elif action == "adjustment":
                 if current_quantity is None:
                     # Can't safely turn a delta ("found 1 damaged") into
@@ -232,13 +290,7 @@ def apply_import_items(items, tool_manager):
                     # item actually started -- name didn't resolve to
                     # exactly one existing item, so refuse rather than
                     # guess at the real stock number.
-                    tool_result = {
-                        "success": False,
-                        "error": (
-                            f"Could not find a unique existing item "
-                            f"matching '{item_name}' to adjust."
-                        ),
-                    }
+                    tool_result = {"success": False, "error": not_found_message}
                 else:
                     tool_result = tool_manager.execute(
                         "adjust_stock",

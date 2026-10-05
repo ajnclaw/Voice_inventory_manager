@@ -203,6 +203,11 @@ class Handler(BaseHTTPRequestHandler):
         filename = (body.get("filename") or "").lower()
         mime_type = body.get("mime_type") or ""
         content_b64 = body.get("content_base64") or ""
+        # Optional: "buy" or "sale", set by the owner in the web UI
+        # before picking the file. When present this overrides the
+        # model's own judgment about transaction direction entirely --
+        # see import_extractor.py's HINT_INSTRUCTIONS.
+        hint = body.get("hint") or None
 
         if not content_b64:
             self._send_json({"error": "missing 'content_base64'"}, status=400)
@@ -218,12 +223,12 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             if filename.endswith(".pdf") or mime_type == "application/pdf":
-                result = extract_from_pdf(raw_bytes, logger=run_logger)
+                result = extract_from_pdf(raw_bytes, logger=run_logger, hint=hint)
             elif mime_type.startswith("image/") or filename.endswith(
                 (".jpg", ".jpeg", ".png", ".webp", ".heic")
             ):
                 result = extract_from_image(
-                    raw_bytes, mime_type or "image/jpeg", logger=run_logger
+                    raw_bytes, mime_type or "image/jpeg", logger=run_logger, hint=hint
                 )
             else:
                 # Plain text/CSV -- anything else falls through here too,
@@ -231,7 +236,7 @@ class Handler(BaseHTTPRequestHandler):
                 # text and likely returns an empty/explained result
                 # rather than crashing.
                 text = raw_bytes.decode("utf-8", errors="replace")
-                result = extract_from_text(text, logger=run_logger)
+                result = extract_from_text(text, logger=run_logger, hint=hint)
         except Exception as exc:
             run_logger.log_event(
                 "upload_failed", f"Extraction raised: {exc}", level="error"
@@ -308,7 +313,7 @@ def main():
     print(f"Inventory agent listening on http://{HOST}:{PORT}")
     print(f"LLM provider: {LLM_PROVIDER} (model: {DEFAULT_MODEL})")
     print('POST /chat {"message": "..."} -> {"reply": "...", "status": "..."}')
-    print('POST /upload {"filename", "mime_type", "content_base64"} -> extracted items (no writes)')
+    print('POST /upload {"filename", "mime_type", "content_base64", "hint"?} -> extracted items (no writes)')
     print('POST /import/confirm {"items": [...]} -> applies them, returns per-item results')
     print("DELETE /history -> clears conversation history")
     print("AGENT_AUTO_APPROVE=" + os.environ.get("AGENT_AUTO_APPROVE", "0"))
