@@ -18,6 +18,7 @@ logs/
 # history kept; they're not meant to live in git.
 transcripts.jsonl
 usage.db
+monitoring.db
 
 # Local secrets -- never commit
 .env

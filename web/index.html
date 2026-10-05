@@ -1098,7 +1098,24 @@
     }
   });
 
-  importCancelBtn.addEventListener("click", closeImportOverlay);
+  importCancelBtn.addEventListener("click", function () {
+    // Fire-and-forget: tells the backend this extraction was rejected
+    // rather than saved (see agent/monitoring.py) -- purely a server-
+    // side quality signal. Deliberately a raw fetch, not callApi(): on
+    // a 401 callApi() would bounce the owner to the re-auth screen,
+    // which is a real UI side effect this silent background beacon
+    // should never cause. Never blocks the actual cancel either way.
+    fetch("/import/cancel", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + getToken(),
+      },
+      body: JSON.stringify({ item_count: pendingItems.length }),
+    }).catch(function () {});
+
+    closeImportOverlay();
+  });
 
   importConfirmBtn.addEventListener("click", async function () {
     // Second click, after results are already shown, just closes it.

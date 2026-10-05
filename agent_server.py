@@ -54,6 +54,7 @@ from agent.import_extractor import (
 )
 from agent.inventory_db import inventory_overview
 from agent.logger import RunLogger
+from agent import monitoring
 from agent.responder import Responder
 from agent.transcript_log import append_turn, read_all as read_transcript
 from agent import usage_tracker
@@ -110,6 +111,11 @@ class Handler(BaseHTTPRequestHandler):
         if self._authorized():
             return True
 
+        # Silent before this -- a wrong/missing token just got a 401
+        # with no record anywhere. Harmless while this only sits behind
+        # a private adb tunnel, but once it's a public EC2 endpoint,
+        # someone probing it with bad tokens should leave a trail.
+        monitoring.record_auth_failure(self.path, self.client_address[0])
         self._send_json({"error": "unauthorized"}, status=401)
         return False
 
@@ -157,6 +163,12 @@ class Handler(BaseHTTPRequestHandler):
             # agent/transcript_log.py. Every /chat and /upload turn,
             # in order, with model/tokens/cost per turn.
             self._send_json({"turns": read_transcript()})
+        elif self.path == "/stats":
+            # Backend-only system-health view: auth failures, request
+            # failure rate, bulk-import accept/reject rate. Deliberately
+            # never called from web/index.html -- this is for checking
+            # on the system, not something the shop owner's app shows.
+            self._send_json(monitoring.stats())
         else:
             self._send_json({"error": "not found"}, status=404)
 
@@ -170,6 +182,8 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_upload()
         elif self.path == "/import/confirm":
             self._handle_import_confirm()
+        elif self.path == "/import/cancel":
+            self._handle_import_cancel()
         else:
             self._send_json({"error": "not found"}, status=404)
 
@@ -204,6 +218,7 @@ class Handler(BaseHTTPRequestHandler):
             status = "failed"
 
         run_logger.finalize(status)
+        monitoring.record_request_outcome("chat", status)
 
         # The continuous, human-readable conversation record (separate
         # from the detailed per-request trace run_logger just wrote) --
@@ -286,6 +301,7 @@ class Handler(BaseHTTPRequestHandler):
                 "upload_failed", f"Extraction raised: {exc}", level="error"
             )
             run_logger.finalize("failed")
+            monitoring.record_request_outcome("upload", "failed")
             self._send_json({"error": f"Couldn't read that file: {exc}"}, status=500)
             return
 
@@ -294,6 +310,7 @@ class Handler(BaseHTTPRequestHandler):
             f"Extracted {len(result.get('items', []))} item(s): {result.get('summary', '')}",
         )
         run_logger.finalize("completed")
+        monitoring.record_request_outcome("upload", "completed")
 
         append_turn(
             f"[upload: {filename or mime_type or 'unnamed file'}]",
@@ -332,8 +349,27 @@ class Handler(BaseHTTPRequestHandler):
         results = apply_import_items(items, responder.tool_manager)
 
         run_logger.finalize("completed")
+        monitoring.record_import_outcome("confirmed", len(items))
 
         self._send_json({"results": results})
+
+    def _handle_import_cancel(self):
+        """
+        Fire-and-forget signal from the web UI: the owner reviewed an
+        extracted preview and rejected it rather than saving it. This
+        is the single most direct quality measurement the bulk-import
+        feature has (see monitoring.py) -- it's never surfaced back to
+        the owner, purely a backend record of how often extraction is
+        actually good enough to use.
+        """
+        try:
+            body = self._read_json_body()
+        except json.JSONDecodeError:
+            body = {}
+
+        item_count = body.get("item_count")
+        monitoring.record_import_outcome("cancelled", item_count)
+        self._send_json({"status": "noted"})
 
     def do_DELETE(self):
         if not self._require_auth():
@@ -372,6 +408,7 @@ def main():
     print("GET /inventory -> full catalog + summary totals (table view)")
     print("GET /usage -> cumulative LLM calls/tokens/estimated cost, all time")
     print("GET /transcript -> saved conversation log (every /chat and /upload turn)")
+    print("GET /stats -> backend-only: auth failures, failure rate, import reject rate")
     print("DELETE /history -> clears conversation history")
     print("AGENT_AUTO_APPROVE=" + os.environ.get("AGENT_AUTO_APPROVE", "0"))
 
