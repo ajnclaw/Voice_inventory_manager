@@ -52,6 +52,7 @@ from agent.import_extractor import (
     extract_from_pdf,
     extract_from_text,
 )
+from agent.inventory_db import inventory_overview
 from agent.logger import RunLogger
 from agent.responder import Responder
 
@@ -129,6 +130,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path == "/health":
             self._send_json({"status": "ok", "turns": len(history)})
+        elif self.path == "/inventory":
+            # Dedicated structured view, bypassing the LLM entirely --
+            # a real table + totals is more reliably "human readable"
+            # than hoping a chat reply formats a long list nicely, and
+            # it's free (no LLM call) and always exactly up to date.
+            self._send_json(inventory_overview())
         else:
             self._send_json({"error": "not found"}, status=404)
 
@@ -315,6 +322,7 @@ def main():
     print('POST /chat {"message": "..."} -> {"reply": "...", "status": "..."}')
     print('POST /upload {"filename", "mime_type", "content_base64", "hint"?} -> extracted items (no writes)')
     print('POST /import/confirm {"items": [...]} -> applies them, returns per-item results')
+    print("GET /inventory -> full catalog + summary totals (table view)")
     print("DELETE /history -> clears conversation history")
     print("AGENT_AUTO_APPROVE=" + os.environ.get("AGENT_AUTO_APPROVE", "0"))
 

@@ -291,6 +291,53 @@ def list_inventory():
     return [_item_row_to_dict(row) for row in rows]
 
 
+def inventory_overview():
+    """
+    The full catalog plus roll-up totals, for a dedicated human-
+    readable view (a real table, not a chat reply the owner has to
+    read as prose). Value is computed from sale_price where set,
+    falling back to cost_price, same degrade-gracefully-when-price-
+    unknown pattern as sales_report -- items with neither don't
+    contribute to the total, and the total is null (not zero) if
+    nothing in the whole catalog has a price on file.
+    """
+    items = list_inventory()
+
+    total_units = 0.0
+    total_value = 0.0
+    value_known = False
+    low_stock_count = 0
+
+    for item in items:
+        total_units += item["current_quantity"]
+
+        price = (
+            item["sale_price"]
+            if item["sale_price"] is not None
+            else item["cost_price"]
+        )
+
+        if price is not None:
+            total_value += item["current_quantity"] * price
+            value_known = True
+
+        if (
+            item["reorder_threshold"] is not None
+            and item["current_quantity"] <= item["reorder_threshold"]
+        ):
+            low_stock_count += 1
+
+    return {
+        "items": items,
+        "summary": {
+            "total_items": len(items),
+            "total_units": total_units,
+            "total_value": total_value if value_known else None,
+            "low_stock_count": low_stock_count,
+        },
+    }
+
+
 def list_low_stock():
     with _connect() as conn:
         rows = conn.execute(

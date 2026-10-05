@@ -226,6 +226,98 @@
   #import-confirm-btn { background: var(--accent); color: white; }
   #import-cancel-btn { background: #2a2e37; color: var(--text); }
 
+  /* Inventory table view -- a real table + totals, not a chat reply */
+  #inventory-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    z-index: 12;
+  }
+
+  #inventory-header {
+    padding: 14px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid #2a2e37;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  #inventory-header h2 {
+    margin: 0;
+    font-size: 16px;
+  }
+
+  #inventory-close-btn {
+    background: none;
+    border: 1px solid #3a3f4b;
+    color: var(--text-dim);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  #inventory-table-wrap {
+    flex: 1;
+    overflow: auto;
+    padding: 12px 16px;
+  }
+
+  #inventory-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+
+  #inventory-table th {
+    text-align: left;
+    color: var(--text-dim);
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    padding: 8px 10px;
+    border-bottom: 1px solid #2a2e37;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+  }
+
+  #inventory-table td {
+    padding: 10px;
+    border-bottom: 1px solid #1f232b;
+  }
+
+  #inventory-table tr.low-stock td:first-child {
+    color: var(--error);
+  }
+
+  #inventory-table td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  #inventory-summary-bar {
+    padding: 14px 16px;
+    background: var(--panel);
+    border-top: 1px solid #2a2e37;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    font-size: 13px;
+  }
+
+  #inventory-summary-bar .stat-value {
+    font-size: 18px;
+    font-weight: 700;
+    display: block;
+  }
+
+  #inventory-summary-bar .stat-label {
+    color: var(--text-dim);
+  }
+
   #messages {
     flex: 1;
     overflow-y: auto;
@@ -266,6 +358,38 @@
 
   .msg.pending {
     opacity: 0.5;
+  }
+
+  .msg-time {
+    display: block;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.55);
+    margin-top: 4px;
+    text-align: right;
+  }
+
+  .msg.assistant .msg-time, .msg.error .msg-time {
+    color: var(--text-dim);
+  }
+
+  .msg-image {
+    display: block;
+    max-width: 100%;
+    max-height: 260px;
+    border-radius: 10px;
+    margin-bottom: 4px;
+    object-fit: contain;
+  }
+
+  .msg-file-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(0, 0, 0, 0.15);
+    border-radius: 10px;
+    padding: 8px 10px;
+    margin-bottom: 4px;
+    font-size: 13px;
   }
 
   #composer {
@@ -361,6 +485,7 @@
   <header>
     <h1>Shop Inventory</h1>
     <div class="header-actions">
+      <button id="inventory-btn" title="View full inventory table">📊</button>
       <button id="mute-btn" title="Toggle spoken replies">🔊</button>
       <button id="clear-btn">Clear chat</button>
     </div>
@@ -417,6 +542,46 @@
       </div>
     </div>
   </div>
+
+  <!-- Inventory table view -- fetched fresh from GET /inventory, no
+       LLM involved, so it's always exact and always fast. -->
+  <div id="inventory-overlay" class="hidden">
+    <div id="inventory-header">
+      <h2>Full Inventory</h2>
+      <button id="inventory-close-btn">Close</button>
+    </div>
+    <div id="inventory-table-wrap">
+      <table id="inventory-table">
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Category</th>
+            <th class="num">Qty</th>
+            <th class="num">Unit</th>
+          </tr>
+        </thead>
+        <tbody id="inventory-table-body"></tbody>
+      </table>
+    </div>
+    <div id="inventory-summary-bar">
+      <div>
+        <span id="stat-total-items" class="stat-value">--</span>
+        <span class="stat-label">Items</span>
+      </div>
+      <div>
+        <span id="stat-total-units" class="stat-value">--</span>
+        <span class="stat-label">Total units</span>
+      </div>
+      <div>
+        <span id="stat-low-stock" class="stat-value">--</span>
+        <span class="stat-label">Low stock</span>
+      </div>
+      <div>
+        <span id="stat-total-value" class="stat-value">--</span>
+        <span class="stat-label">Est. value</span>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -449,6 +614,10 @@
   const hintSaleBtn = document.getElementById("hint-sale-btn");
   const hintAutoBtn = document.getElementById("hint-auto-btn");
   const hintCancelBtn = document.getElementById("hint-cancel-btn");
+  const inventoryBtn = document.getElementById("inventory-btn");
+  const inventoryOverlay = document.getElementById("inventory-overlay");
+  const inventoryCloseBtn = document.getElementById("inventory-close-btn");
+  const inventoryTableBody = document.getElementById("inventory-table-body");
 
   function getToken() {
     return localStorage.getItem(TOKEN_KEY) || "";
@@ -474,10 +643,75 @@
     textInput.focus();
   }
 
+  function formatTime(date) {
+    date = date || new Date();
+    return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+
+  // Every message bubble is .msg > (.msg-body, .msg-time) -- kept as
+  // two separate children (not one textContent blob) so later code
+  // can replace just the body (e.g. "..." -> the real reply) via
+  // setMessageBody() without wiping out the timestamp alongside it.
   function addMessage(role, text) {
     const el = document.createElement("div");
     el.className = "msg " + role;
-    el.textContent = text;
+
+    const body = document.createElement("div");
+    body.className = "msg-body";
+    body.textContent = text;
+    el.appendChild(body);
+
+    const time = document.createElement("span");
+    time.className = "msg-time";
+    time.textContent = formatTime();
+    el.appendChild(time);
+
+    messagesEl.appendChild(el);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return el;
+  }
+
+  function setMessageBody(el, text) {
+    const body = el.querySelector(".msg-body");
+    if (body) body.textContent = text;
+  }
+
+  // Like addMessage, but shows the actual attached image inline (or a
+  // file chip for non-images, e.g. a PDF) instead of just naming it --
+  // same WhatsApp-style "here's what I sent" bubble, with an optional
+  // caption line (used for the buy/sale hint label).
+  function addAttachmentMessage(role, file, dataUrl, caption) {
+    const el = document.createElement("div");
+    el.className = "msg " + role;
+
+    const body = document.createElement("div");
+    body.className = "msg-body";
+
+    if (file.type && file.type.startsWith("image/")) {
+      const img = document.createElement("img");
+      img.className = "msg-image";
+      img.src = dataUrl;
+      body.appendChild(img);
+    } else {
+      const chip = document.createElement("div");
+      chip.className = "msg-file-chip";
+      chip.textContent = "📄 " + file.name;
+      body.appendChild(chip);
+    }
+
+    if (caption) {
+      const captionEl = document.createElement("div");
+      captionEl.textContent = caption;
+      body.appendChild(captionEl);
+    }
+
+    el.appendChild(body);
+
+    const time = document.createElement("span");
+    time.className = "msg-time";
+    time.textContent = formatTime();
+    el.appendChild(time);
+
     messagesEl.appendChild(el);
     messagesEl.scrollTop = messagesEl.scrollHeight;
     return el;
@@ -608,7 +842,7 @@
         body: JSON.stringify({ message: text }),
       });
 
-      pending.textContent = data.reply || "(no reply)";
+      setMessageBody(pending, data.reply || "(no reply)");
       pending.className = "msg assistant";
       speak(data.reply);
     } catch (err) {
@@ -675,16 +909,12 @@
 
   let pendingItems = [];
 
-  function fileToBase64(file) {
+  function fileToDataUrl(file) {
     return new Promise(function (resolve, reject) {
       const reader = new FileReader();
 
       reader.onload = function () {
-        // reader.result is "data:<mime>;base64,<data>" -- strip the
-        // prefix, the server only wants the base64 payload itself.
-        const result = reader.result;
-        const commaIndex = result.indexOf(",");
-        resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
+        resolve(reader.result); // "data:<mime>;base64,<data>"
       };
 
       reader.onerror = function () {
@@ -693,6 +923,17 @@
 
       reader.readAsDataURL(file);
     });
+  }
+
+  async function fileToBase64(file) {
+    // The server only wants the base64 payload, not the "data:..."
+    // prefix -- strip it. Callers that also need to *display* the
+    // file (e.g. an <img> src) should read fileToDataUrl once
+    // themselves rather than this, to avoid reading the same file
+    // twice.
+    const dataUrl = await fileToDataUrl(file);
+    const commaIndex = dataUrl.indexOf(",");
+    return commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl;
   }
 
   function describeItem(entry) {
@@ -812,14 +1053,26 @@
     if (!file) return;
 
     const hintLabel =
-      pendingHint === "buy" ? " (marked as purchase)" :
-      pendingHint === "sale" ? " (marked as sale)" : "";
+      pendingHint === "buy" ? "Marked as purchase" :
+      pendingHint === "sale" ? "Marked as sale" : "";
 
-    addMessage("user", `[attached: ${file.name}]${hintLabel}`);
+    let dataUrl = null;
+
+    try {
+      dataUrl = await fileToDataUrl(file); // read once, reused below
+      addAttachmentMessage("user", file, dataUrl, hintLabel);
+    } catch (err) {
+      // Couldn't even read the file locally -- fall back to a plain
+      // text note so the attempt is still visible in the log.
+      addMessage("user", `[attached: ${file.name}]`);
+    }
+
     const pending = addMessage("assistant pending", "Reading file...");
 
     try {
-      const contentBase64 = await fileToBase64(file);
+      const commaIndex = dataUrl ? dataUrl.indexOf(",") : -1;
+      const contentBase64 =
+        commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : await fileToBase64(file);
 
       const data = await callApi("/upload", {
         method: "POST",
@@ -872,6 +1125,80 @@
     } finally {
       importCancelBtn.disabled = false;
     }
+  });
+
+  // ---- Inventory table view: GET /inventory bypasses the LLM
+  // entirely (see agent_server.py / agent/inventory_db.py's
+  // inventory_overview()) -- a real table + totals, always exact,
+  // always fast, instead of hoping a chat reply formats a long list
+  // readably.
+
+  function formatMoney(value) {
+    if (value == null) return "--";
+    return "Rs " + value.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+  }
+
+  function formatQuantity(value) {
+    // Quantities are REAL in the DB (supports fractional units like
+    // kg/litre) but almost always whole numbers in practice -- don't
+    // show "10.0" when "10" reads cleaner.
+    return Number.isInteger(value) ? String(value) : value.toFixed(2);
+  }
+
+  async function openInventoryView() {
+    inventoryTableBody.innerHTML = "<tr><td colspan=\"4\">Loading...</td></tr>";
+    inventoryOverlay.classList.remove("hidden");
+
+    try {
+      const data = await callApi("/inventory", { method: "GET" });
+      renderInventoryTable(data);
+    } catch (err) {
+      if (err.message !== "unauthorized") {
+        inventoryTableBody.innerHTML =
+          "<tr><td colspan=\"4\">Couldn't load inventory: " +
+          err.message + "</td></tr>";
+      }
+    }
+  }
+
+  function renderInventoryTable(data) {
+    const items = data.items || [];
+    const summary = data.summary || {};
+
+    inventoryTableBody.innerHTML = "";
+
+    if (items.length === 0) {
+      inventoryTableBody.innerHTML =
+        "<tr><td colspan=\"4\">No items in the catalog yet.</td></tr>";
+    } else {
+      items.forEach(function (item) {
+        const row = document.createElement("tr");
+        const isLow =
+          item.reorder_threshold != null &&
+          item.current_quantity <= item.reorder_threshold;
+
+        if (isLow) row.classList.add("low-stock");
+
+        row.innerHTML =
+          "<td>" + item.name + (isLow ? " ⚠️" : "") + "</td>" +
+          "<td>" + (item.category || "--") + "</td>" +
+          "<td class=\"num\">" + formatQuantity(item.current_quantity) + "</td>" +
+          "<td class=\"num\">" + item.unit + "</td>";
+
+        inventoryTableBody.appendChild(row);
+      });
+    }
+
+    document.getElementById("stat-total-items").textContent = summary.total_items ?? "--";
+    document.getElementById("stat-total-units").textContent =
+      summary.total_units != null ? formatQuantity(summary.total_units) : "--";
+    document.getElementById("stat-low-stock").textContent = summary.low_stock_count ?? "--";
+    document.getElementById("stat-total-value").textContent = formatMoney(summary.total_value);
+  }
+
+  inventoryBtn.addEventListener("click", openInventoryView);
+  inventoryCloseBtn.addEventListener("click", function () {
+    inventoryOverlay.classList.add("hidden");
   });
 
   // On load: if a token is already stored, go straight to chat --
