@@ -127,6 +127,24 @@ def rename_item(old_name, new_name):
     return {"old_name": old_name, "new_name": new_name}
 
 
+def set_category(item_name, category):
+    """
+    Corrects an item's category -- e.g. a bulk-import extraction that
+    initially missed or mislabeled the product-family heading a part
+    actually belongs to (see agent/import_extractor.py's category
+    rule). Quantity, price, and transaction history are untouched.
+    """
+    with _connect() as conn:
+        _get_item_row(conn, item_name)  # raises ItemNotFound if missing
+
+        conn.execute(
+            "UPDATE items SET category = ? WHERE name = ?",
+            (category, item_name),
+        )
+
+    return {"item": item_name, "category": category}
+
+
 def add_item(
     name,
     category=None,

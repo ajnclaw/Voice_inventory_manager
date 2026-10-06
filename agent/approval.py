@@ -20,6 +20,7 @@ class ApprovalPolicy:
     APPROVAL_REQUIRED_TOOLS = {
         "add_item",
         "rename_item",
+        "set_category",
         "record_sale",
         "record_restock",
         "adjust_stock",

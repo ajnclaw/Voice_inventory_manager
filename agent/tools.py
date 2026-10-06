@@ -31,6 +31,10 @@ def rename_item_tool(item, new_name):
     return _wrap(inventory_db.rename_item, old_name=item, new_name=new_name)
 
 
+def set_category_tool(item, category):
+    return _wrap(inventory_db.set_category, item_name=item, category=category)
+
+
 def add_item_tool(
     name,
     category=None,
@@ -104,6 +108,7 @@ def sales_report_tool(since):
 TOOL_FUNCTIONS = {
     "add_item": add_item_tool,
     "rename_item": rename_item_tool,
+    "set_category": set_category_tool,
     "search_items": search_items_tool,
     "record_sale": record_sale_tool,
     "record_restock": record_restock_tool,
@@ -188,6 +193,33 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["item", "new_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_category",
+            "description": (
+                "Corrects an existing item's category -- quantity, "
+                "price, name, and transaction history are untouched. "
+                "Use this when the owner says an item's category is "
+                "wrong or missing (e.g. a bulk import that missed the "
+                "product-family heading a part belongs to)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item": {
+                        "type": "string",
+                        "description": "The item's exact current stored name.",
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "The corrected category.",
+                    },
+                },
+                "required": ["item", "category"],
             },
         },
     },

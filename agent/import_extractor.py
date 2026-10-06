@@ -58,10 +58,12 @@ HINT_INSTRUCTIONS = {
         "later; it's a deliberate placeholder, not a guess you're "
         "making up. If no such column exists at all, use 0 rather than "
         "inventing a number. A real catalog row has a price -- if "
-        "something has no price at all, it's very likely letterhead, a "
-        "section heading, or other boilerplate (see the rule on this "
-        "below), not an actual product; leave it out rather than "
-        "emitting it as an item with a null price."
+        "something has no price at all, check whether it's a product-"
+        "family/section heading (e.g. the engine or machine model this "
+        "whole page of parts belongs to) -- if so, that's the "
+        "\"category\" for the items under it, not an item itself (see "
+        "the category rule below). Otherwise it's letterhead; leave it "
+        "out entirely."
     ),
 }
 
@@ -79,6 +81,7 @@ in exactly this shape:
       "action": "restock" | "sale" | "adjustment" | "new_item",
       "quantity": <number>,
       "unit_price": <number or null>,
+      "category": "<see category rule below, or null>",
       "reason": "<required for action=adjustment, otherwise null>"
     }
   ],
@@ -108,14 +111,25 @@ Rules:
   from the Rate column (not the Amount/line-total column, which is
   quantity times rate, not the per-unit price). Ignore the "Total"
   row itself -- it is not a separate item.
-- Documents have letterhead and boilerplate that is NOT a line item --
-  company name, address, phone/mobile numbers, dates, page headers,
-  section/category titles, "Total"/"Subtotal" rows, signatures. Skip
-  all of it. A real line item in a priced list essentially always has
-  a price next to it; text with no price, no quantity, and no column
-  values around it (e.g. a company name or a document title sitting in
-  a page footer) is boilerplate, not a product -- do not emit it as an
-  item just because it's physically near the item rows in the text.
+- Documents have letterhead that is NOT a line item and carries no
+  useful information -- company name, address, phone/mobile numbers,
+  dates, signatures, "Total"/"Subtotal" rows. Skip all of it entirely;
+  never emit it as an item.
+- A SECTION or PRODUCT-FAMILY heading is different from letterhead --
+  it IS useful, just not as its own item. Text like "170F 7.5 HP Power
+  Weeder Engine Spare" or "Brake Parts" sitting above/among a group of
+  items describes what THOSE items are (which engine/machine/product
+  line they belong to) -- capture it as the "category" field on every
+  item it applies to, rather than discarding it or emitting it as a
+  fake priceless item of its own. If a new heading appears partway
+  through the document, it applies to the items that follow it, not
+  the ones before it. If there's no such heading anywhere, leave
+  "category" null -- don't invent one.
+- Either way: a real line item essentially always has a price next to
+  it. Text with no price, no quantity, and no column values around it
+  is either letterhead (skip it) or a category heading (capture it on
+  the surrounding items' "category" field) -- never emit it as a
+  standalone item with a null price.
 - If the text/image is in Hinglish or Hindi, understand it the same
   way as English -- extract the item name as written, don't translate
   it into a different language.
@@ -392,6 +406,7 @@ def apply_import_items(items, tool_manager):
                         "name": item_name,
                         "initial_quantity": quantity,
                         "cost_price": unit_price,
+                        "category": entry.get("category"),
                     },
                 )
             else:

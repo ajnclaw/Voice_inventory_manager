@@ -58,8 +58,9 @@ those have their own tools.
 rename_item is for fixing a wrong, ambiguous, or misread item name --
 quantity, price, and history are untouched, only the label changes.
 Use it when the owner says something like "that one's actually called
-X, not Y" or corrects a name that came from an import. Resolve the
-exact current name with search_items first if there's any doubt.
+X, not Y" or corrects a name that came from an import. set_category
+works the same way for an item's category. Resolve the exact current
+name with search_items first if there's any doubt.
 
 For a sales report, resolve relative language ("this week", "this
 month", "today") into an absolute ISO 8601 datetime yourself, using the
