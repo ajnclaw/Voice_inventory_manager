@@ -20,5 +20,11 @@ transcripts.jsonl
 usage.db
 monitoring.db
 
+# Product pictures extracted from real supplier catalogs during
+# import (see agent/pdf_images.py) -- real data tied to actual
+# imports, and binary blobs besides; same treatment as inventory.db.
+# The directory itself is created fresh on demand, nothing to keep.
+product_images/
+
 # Local secrets -- never commit
 .env

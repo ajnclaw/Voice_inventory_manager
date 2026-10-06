@@ -230,6 +230,16 @@
     font-size: 14px;
   }
 
+  .conflict-image {
+    display: block;
+    max-width: 100%;
+    max-height: 140px;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    object-fit: contain;
+    background: #1f232b;
+  }
+
   #import-actions {
     display: flex;
     gap: 8px;
@@ -699,6 +709,43 @@
     if (body) body.textContent = text;
   }
 
+  // Fetches a product image with the real Authorization header (a
+  // plain <img src> can't send custom headers, so a direct URL would
+  // either have to be unauthenticated -- inconsistent with every other
+  // endpoint here -- or just fail) and turns it into a blob URL the
+  // <img> tag can actually use.
+  async function loadAuthenticatedImage(url) {
+    const response = await fetch(url, {
+      headers: { Authorization: "Bearer " + getToken() },
+    });
+
+    if (!response.ok) throw new Error("Image request failed: " + response.status);
+
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+  }
+
+  // Fetches and appends an <img> into any container element -- used
+  // both for a chat reply's .msg-body and for the import-conflict
+  // card below (same auth-blob mechanism either way).
+  async function appendAuthenticatedImage(container, imageUrl, imgClassName) {
+    try {
+      const blobUrl = await loadAuthenticatedImage(imageUrl);
+      const img = document.createElement("img");
+      img.className = imgClassName;
+      img.src = blobUrl;
+      container.appendChild(img);
+    } catch (err) {
+      // Non-fatal -- the surrounding text/UI already rendered; a
+      // missing/broken picture just means no image shows up.
+    }
+  }
+
+  async function appendImageToMessage(el, imageUrl) {
+    const body = el.querySelector(".msg-body");
+    if (body) await appendAuthenticatedImage(body, imageUrl, "msg-image");
+  }
+
   // Like addMessage, but shows the actual attached image inline (or a
   // file chip for non-images, e.g. a PDF) instead of just naming it --
   // same WhatsApp-style "here's what I sent" bubble, with an optional
@@ -868,6 +915,10 @@
       setMessageBody(pending, data.reply || "(no reply)");
       pending.className = "msg assistant";
       speak(data.reply);
+
+      if (data.image_url) {
+        appendImageToMessage(pending, data.image_url);
+      }
     } catch (err) {
       pending.remove();
 
@@ -1019,6 +1070,16 @@
 
         if (entry.name_conflict) {
           row.className = "import-item conflict";
+
+          // Each conflicting item was matched to its own picture from
+          // the source PDF during extraction (see pdf_images.py) --
+          // showing it here is the actual distinguishing information,
+          // better than a bare line number: the owner can look at it
+          // and immediately tell which real part this row is.
+          if (entry.image_path) {
+            const imgUrl = "/product_images/" + entry.image_path.split("/").pop();
+            appendAuthenticatedImage(row, imgUrl, "conflict-image");
+          }
 
           const label = document.createElement("div");
           label.className = "conflict-label";

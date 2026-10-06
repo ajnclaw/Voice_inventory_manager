@@ -255,6 +255,44 @@ def extract_from_image(image_bytes, mime_type="image/jpeg", logger=None, hint=No
     return _call_extraction(content, logger=logger, hint=hint)
 
 
+def _attach_images(result, pdf_bytes):
+    """
+    Best-effort: matches each extracted item to a product picture from
+    the PDF (see pdf_images.py -- pure page-geometry matching,
+    independent of the LLM's output order). Never raises -- a PDF that
+    doesn't look like a picture-column table just yields no matches,
+    which is a normal, silent no-op here, not a failure of the actual
+    extraction.
+
+    Consumes images per distinct name in document order rather than a
+    plain name->image dict -- when the PDF repeats the same
+    description for two different rows (confirmed real case: two
+    unrelated parts both called "170F FLYWHEEL FAN" at different
+    prices), the Nth extracted item with that name gets the Nth image
+    with that name, not whichever one happened to be extracted last.
+    """
+    try:
+        from .pdf_images import extract_row_images, normalize
+
+        image_pairs = extract_row_images(pdf_bytes)
+    except Exception:
+        return
+
+    if not image_pairs:
+        return
+
+    queues = {}
+
+    for name, path in image_pairs:
+        queues.setdefault(name, []).append(path)
+
+    for item in result.get("items", []):
+        queue = queues.get(normalize(item.get("item", "")))
+
+        if queue:
+            item["image_path"] = queue.pop(0)
+
+
 def extract_from_pdf(pdf_bytes, logger=None, hint=None):
     import pymupdf as fitz  # lazy import so every other code path in
     # this project (the normal chat flow) doesn't pay the import cost
@@ -269,7 +307,9 @@ def extract_from_pdf(pdf_bytes, logger=None, hint=None):
 
         # A real text-layer PDF: cheap, reliable, no vision call needed.
         if len(full_text) > 20:
-            return extract_from_text(full_text, logger=logger, hint=hint)
+            result = extract_from_text(full_text, logger=logger, hint=hint)
+            _attach_images(result, pdf_bytes)
+            return result
 
         # No usable text layer (a scanned/photographed PDF) -- fall
         # back to reading pages as images instead, same path as a
@@ -407,6 +447,7 @@ def apply_import_items(items, tool_manager):
                         "initial_quantity": quantity,
                         "cost_price": unit_price,
                         "category": entry.get("category"),
+                        "image_path": entry.get("image_path"),
                     },
                 )
             else:

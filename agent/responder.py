@@ -168,6 +168,14 @@ class Responder:
             {"role": "user", "content": prompt},
         ]
 
+        # Tracks the most recent item the conversation actually looked
+        # up, so a picture can ride along with the text reply when one
+        # exists -- "show the picture when the owner asks about an
+        # item" needs *some* signal back to the HTTP layer beyond the
+        # plain text, since the image itself has to be fetched
+        # separately by the web UI.
+        last_item_image = None
+
         for iteration in range(max_iterations):
             response = chat(
                 "responder",
@@ -182,13 +190,28 @@ class Responder:
             tool_calls = response.message.tool_calls
 
             if not tool_calls:
-                return strip_markdown(response.message.content or "")
+                return {
+                    "reply": strip_markdown(response.message.content or ""),
+                    "image_path": last_item_image,
+                }
 
             for tool_call in tool_calls:
                 tool_name = tool_call.function.name
                 arguments = tool_call.function.arguments
 
                 result = self.tool_manager.execute(tool_name, arguments)
+
+                if result.get("success"):
+                    output = result.get("output")
+
+                    if tool_name == "check_stock" and isinstance(output, dict):
+                        last_item_image = output.get("image_path") or last_item_image
+                    elif (
+                        tool_name == "search_items"
+                        and isinstance(output, list)
+                        and len(output) == 1
+                    ):
+                        last_item_image = output[0].get("image_path") or last_item_image
 
                 messages.append(
                     {
@@ -198,7 +221,10 @@ class Responder:
                     }
                 )
 
-        return (
-            "I wasn't able to finish looking into that -- "
-            "could you rephrase or try again?"
-        )
+        return {
+            "reply": (
+                "I wasn't able to finish looking into that -- "
+                "could you rephrase or try again?"
+            ),
+            "image_path": last_item_image,
+        }

@@ -74,6 +74,16 @@ COMPACT_TRIGGER_TURNS = 10
 # data (/chat, /health, DELETE /history) still requires it.
 WEB_INDEX = (PROJECT_ROOT / "web" / "index.html").read_text(encoding="utf-8")
 
+IMAGE_DIR = PROJECT_ROOT / "product_images"
+
+IMAGE_CONTENT_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
+
 responder = Responder()
 history = []
 
@@ -136,12 +146,25 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_file(self, path, content_type):
+        body = path.read_bytes()
+
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             self._send_html(WEB_INDEX)
             return
 
         if not self._require_auth():
+            return
+
+        if self.path.startswith("/product_images/"):
+            self._handle_product_image()
             return
 
         if self.path == "/health":
@@ -210,8 +233,12 @@ class Handler(BaseHTTPRequestHandler):
         run_logger = RunLogger(user_input)
         responder.set_logger(run_logger)
 
+        image_path = None
+
         try:
-            reply = responder.respond(user_input, history=history)
+            result = responder.respond(user_input, history=history)
+            reply = result["reply"]
+            image_path = result.get("image_path")
             status = "completed"
         except Exception as exc:
             reply = f"Something went wrong: {exc}"
@@ -243,7 +270,43 @@ class Handler(BaseHTTPRequestHandler):
             logger=run_logger,
         )
 
-        self._send_json({"reply": reply, "status": status})
+        self._send_json(
+            {
+                "reply": reply,
+                "status": status,
+                "image_url": f"/product_images/{image_path.split('/')[-1]}"
+                if image_path
+                else None,
+            }
+        )
+
+    def _handle_product_image(self):
+        """
+        Serves a product picture (see agent/pdf_images.py -- saved
+        under product_images/ during a catalog import, path stored on
+        the item as image_path). Auth-gated like everything else;
+        since a plain <img src> can't send an Authorization header,
+        the web UI fetches this with a real authenticated request and
+        turns the response into a blob URL instead -- see
+        web/index.html's loadAuthenticatedImage().
+
+        Filename only, no path separators -- this serves exclusively
+        out of IMAGE_DIR, never anything else on disk.
+        """
+        filename = self.path[len("/product_images/"):]
+
+        if "/" in filename or "\\" in filename or ".." in filename:
+            self._send_json({"error": "invalid filename"}, status=400)
+            return
+
+        path = IMAGE_DIR / filename
+
+        if not path.is_file():
+            self._send_json({"error": "not found"}, status=404)
+            return
+
+        content_type = IMAGE_CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
+        self._send_file(path, content_type)
 
     def _handle_upload(self):
         """

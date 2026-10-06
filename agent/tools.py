@@ -43,6 +43,7 @@ def add_item_tool(
     cost_price=None,
     sale_price=None,
     reorder_threshold=None,
+    image_path=None,
 ):
     return _wrap(
         inventory_db.add_item,
@@ -53,6 +54,7 @@ def add_item_tool(
         cost_price=cost_price,
         sale_price=sale_price,
         reorder_threshold=reorder_threshold,
+        image_path=image_path,
     )
 
 

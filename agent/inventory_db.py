@@ -44,6 +44,14 @@ def _connect():
         )
         """
     )
+    # items.image_path was added after the table already existed in
+    # real use -- CREATE TABLE IF NOT EXISTS doesn't retroactively add
+    # columns, so migrate explicitly. SQLite has no "ADD COLUMN IF NOT
+    # EXISTS"; catching the duplicate-column error is the standard way.
+    try:
+        conn.execute("ALTER TABLE items ADD COLUMN image_path TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS transactions (
@@ -74,6 +82,7 @@ def _item_row_to_dict(row):
         "reorder_threshold": row["reorder_threshold"],
         "cost_price": row["cost_price"],
         "sale_price": row["sale_price"],
+        "image_path": row["image_path"],
     }
 
 
@@ -153,6 +162,7 @@ def add_item(
     cost_price=None,
     sale_price=None,
     reorder_threshold=None,
+    image_path=None,
 ):
     with _connect() as conn:
         existing = conn.execute(
@@ -171,11 +181,11 @@ def add_item(
         cursor = conn.execute(
             "INSERT INTO items "
             "(name, category, unit, current_quantity, reorder_threshold, "
-            " cost_price, sale_price, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " cost_price, sale_price, image_path, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 name, category, unit, initial_quantity, reorder_threshold,
-                cost_price, sale_price, created_at,
+                cost_price, sale_price, image_path, created_at,
             ),
         )
 
@@ -198,6 +208,7 @@ def add_item(
         "reorder_threshold": reorder_threshold,
         "cost_price": cost_price,
         "sale_price": sale_price,
+        "image_path": image_path,
     }
 
 
