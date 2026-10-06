@@ -32,11 +32,11 @@ for the full reasoning; the short version:
   `Responder.respond()` directly.
 
 - **Small, domain-only tool list** (`agent/tools.py`): `add_item`,
-  `search_items`, `record_sale`, `record_restock`, `adjust_stock`,
-  `check_stock`, `list_inventory`, `list_low_stock`, `sales_report`.
-  Nothing else -- no file tools, no shell, no video, no memory-facts.
-  A small, non-overlapping tool list is also just easier for the LLM to
-  route correctly; that's not only a safety argument.
+  `rename_item`, `search_items`, `record_sale`, `record_restock`,
+  `adjust_stock`, `check_stock`, `list_inventory`, `list_low_stock`,
+  `sales_report`. Nothing else -- no file tools, no shell, no video, no
+  memory-facts. A small, non-overlapping tool list is also just easier
+  for the LLM to route correctly; that's not only a safety argument.
 
 - **Minimal dependencies.** Started stdlib-only; PyMuPDF was added for
   bulk import (PDF text extraction / page rendering). Still no local
@@ -72,20 +72,29 @@ endpoint isn't wide open to anyone who finds the URL. See
 
 ```
 POST /chat             {"message": "..."} -> {"reply": "...", "status": "..."}
-POST /upload           {"filename", "mime_type", "content_base64"} -> extracted items (no writes)
+POST /upload           {"filename", "mime_type", "content_base64", "hint"?} -> extracted items (no writes)
 POST /import/confirm   {"items": [...]} -> applies them, returns per-item results
+POST /import/cancel    {"item_count"} -> backend-only rejection signal, nothing shown in the app
 DELETE /history         -> clears conversation history
 GET /health              -> {"status": "ok", "turns": N}
+GET /inventory           -> full catalog + summary totals (table view, no LLM call)
+GET /usage               -> cumulative LLM tokens/cost, all time
+GET /transcript          -> saved conversation log
+GET /stats               -> backend-only: auth failures, failure rate, import reject rate
 ```
 
 `/upload` accepts a text/CSV file, a PDF, or a photo and extracts
 candidate sales/restocks/corrections/new items WITHOUT writing
 anything -- the web UI shows a preview, and only `/import/confirm`
-(after the owner reviews it) actually touches `inventory.db`. See
+(after the owner reviews it) actually touches `inventory.db`. `hint`
+("buy", "sale", or "catalog") tells the extractor upfront what kind of
+document this is, overriding its own judgment -- see
 `agent/import_extractor.py`.
 
-`inventory.db` and `logs/` are created in the current working
-directory on first run -- always run this from the project root.
+`inventory.db` and `logs/` (plus `usage.db`, `monitoring.db`,
+`transcripts.jsonl`) are created in the current working directory on
+first run -- always run this from the project root. See
+[DATA.md](DATA.md) for exactly what's stored where.
 
 ## Hosting
 
