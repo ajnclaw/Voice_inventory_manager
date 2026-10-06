@@ -82,6 +82,7 @@ in exactly this shape:
       "quantity": <number>,
       "unit_price": <number or null>,
       "category": "<see category rule below, or null>",
+      "line_number": "<the Sr No / serial number / row code printed next to this row, exactly as written (e.g. \"1\", \"23\", \"EA07\"), or null if the document has no such numbering>",
       "reason": "<required for action=adjustment, otherwise null>"
     }
   ],
@@ -130,6 +131,15 @@ Rules:
   is either letterhead (skip it) or a category heading (capture it on
   the surrounding items' "category" field) -- never emit it as a
   standalone item with a null price.
+- If a row has a Sr No / serial number / item code printed next to it
+  (a numbered or lettered-and-numbered column at the start of the
+  row, e.g. "1", "23", "EA07"), always capture it in "line_number"
+  exactly as written, even if you also include it as part of the item
+  name itself. This is the exact identifier a separate, independent
+  pass over the document's pictures uses to match each product photo
+  to the right row -- getting it right (or leaving it null when there
+  genuinely isn't one) matters more than it might look, so don't
+  guess or invent a number that isn't actually printed there.
 - If the text/image is in Hinglish or Hindi, understand it the same
   way as English -- extract the item name as written, don't translate
   it into a different language.
@@ -306,16 +316,46 @@ def _attach_images(result, pdf_bytes):
     if not image_pairs:
         return
 
-    queues = {}
+    # Two lookups: by the row's literal Sr No/line number (primary --
+    # an exact, explicit identifier the model copies verbatim off the
+    # page, not something inferred from text similarity) and by
+    # normalized description (fallback, for sources with no numbering
+    # at all, e.g. a handwritten note). Matching product photos by
+    # fuzzy text similarity was tried and explicitly rejected -- a
+    # short generic description can look like a substring of a
+    # different, unrelated item's name, and silently assigning the
+    # wrong picture to the wrong item is worse than assigning none.
+    by_line_number = {}
+    by_description = {}
 
-    for name, path in image_pairs:
-        queues.setdefault(name, []).append(path)
+    for line_number, name, path in image_pairs:
+        if line_number:
+            by_line_number.setdefault(normalize(line_number), []).append(path)
+        by_description.setdefault(name, []).append(path)
+
+    # Both dicts can reference the same underlying path (every row has
+    # both a line number and a description) -- track what's already
+    # been handed out so a line-number match and a description match
+    # can never both claim the same picture for two different items.
+    consumed = set()
+
+    def _take(queue):
+        while queue:
+            candidate = queue.pop(0)
+            if candidate not in consumed:
+                return candidate
+        return None
 
     for item in result.get("items", []):
-        queue = queues.get(normalize(item.get("item", "")))
+        line_number = normalize(item.get("line_number") or "")
+        path = _take(by_line_number.get(line_number, [])) if line_number else None
 
-        if queue:
-            item["image_path"] = queue.pop(0)
+        if path is None:
+            path = _take(by_description.get(normalize(item.get("item", "")), []))
+
+        if path:
+            consumed.add(path)
+            item["image_path"] = path
 
 
 def extract_from_pdf(pdf_bytes, logger=None, hint=None):

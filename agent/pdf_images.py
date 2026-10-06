@@ -25,17 +25,27 @@ def normalize(text):
 
 def extract_row_images(pdf_bytes):
     """
-    Returns a LIST of (normalized_description, "product_images/<file>")
-    pairs, one per table row that has a Sr-No-style leading column and
-    a picture positioned in roughly the same row, in document order
-    (page by page, top to bottom). A list, not a dict keyed by name --
-    a real supplier PDF can and does repeat the same description for
-    two genuinely different parts (confirmed: two unrelated parts both
-    just called "170F FLYWHEEL FAN" at different prices, distinguished
-    only by their picture). Deduplicating into a dict would silently
-    drop one of the two images. Callers match this back to extracted
-    items by consuming entries in order per distinct name -- see
-    import_extractor.py's _attach_images.
+    Returns a LIST of (sr_no, normalized_description,
+    "product_images/<file>") triples, one per table row that has a
+    Sr-No-style leading column and a picture positioned in roughly the
+    same row, in document order (page by page, top to bottom). A list,
+    not a dict keyed by name -- a real supplier PDF can and does
+    repeat the same description for two genuinely different parts
+    (confirmed: two unrelated parts both just called "170F FLYWHEEL
+    FAN" at different prices, distinguished only by their picture).
+    Deduplicating into a dict would silently drop one of the two
+    images.
+
+    sr_no is the literal text of that leading column exactly as
+    printed ("1", "23", "EA07", ...) -- the primary, exact identifier
+    import_extractor.py's _attach_images matches against the model's
+    own "line_number" field, rather than comparing description text
+    for similarity (confirmed real case for why not: the model
+    sometimes folds the Sr No into its cleaned-up item name, e.g.
+    "EA01 Recoil Stater ..." vs this module's bare "Recoil Stater
+    ...", which breaks an exact text match; a *fuzzy* text match to
+    paper over that was tried and explicitly rejected as too easy to
+    mix up two different items with similar-looking names).
     """
     import pymupdf as fitz
 
@@ -71,20 +81,43 @@ def extract_row_images(pdf_bytes):
                 filename = f"{uuid.uuid4().hex}.png"
                 (IMAGE_DIR / filename).write_bytes(pixmap.tobytes("png"))
 
-                result.append((normalize(description), f"product_images/{filename}"))
+                result.append(
+                    (sr_no, normalize(description), f"product_images/{filename}")
+                )
     finally:
         doc.close()
 
     return result
 
 
+_SR_NO_PATTERN = re.compile(r"^[A-Za-z]{0,3}\d{1,4}[A-Za-z]{0,2}$")
+_SR_NO_PREFIX_PATTERN = re.compile(r"^([A-Za-z]{0,3}\d{1,4}[A-Za-z]{0,2})\s+(\S.+)$")
+
+
 def _find_rows(page):
     """
-    Finds table rows by locating short numeric "Sr No"-style spans in
-    the left part of the page, then pairing each with the longest text
-    span on the same line (the item description). A generic heuristic
-    for "Sr No | Description | ..." table layouts, not hardcoded to one
+    Finds table rows by locating short "Sr No"-style spans in the left
+    part of the page, then pairing each with the longest text span on
+    the same line (the item description). A generic heuristic for
+    "Sr No | Description | ..." table layouts, not hardcoded to one
     document's exact pixel coordinates.
+
+    The Sr No column isn't always plain digits -- confirmed on a real
+    supplier PDF using codes like "EA01", "EA02" instead of "1", "2",
+    which a plain text.isdigit() check matched zero rows for and
+    silently skipped every image in the whole document. The pattern
+    allows an optional short letter prefix/suffix around the digits
+    rather than requiring pure numbers.
+
+    Usually the Sr No and description are separate text spans on the
+    same line, paired up by y-position below. But confirmed on that
+    same real PDF: one single row had them landed in ONE merged span
+    ("EA20 Exilator wire  63 cc /68 CC") instead of the usual two --
+    an inconsistency in how that particular line got typeset/exported,
+    not something a "pair with a neighboring span" approach can catch
+    since there's no separate span to pair with. Handled as a second
+    case: a span starting with a valid Sr No followed by more text is
+    treated as both the code and the description in one.
     """
     spans = []
 
@@ -101,22 +134,29 @@ def _find_rows(page):
         text = span["text"].strip()
         x0 = span["bbox"][0]
 
-        if not (text.isdigit() and len(text) <= 3 and x0 < page.rect.width * 0.15):
+        if x0 >= page.rect.width * 0.15:
             continue
 
         y_center = (span["bbox"][1] + span["bbox"][3]) / 2
 
-        same_row = [
-            s for s in spans
-            if s is not span
-            and abs(((s["bbox"][1] + s["bbox"][3]) / 2) - y_center) < 6
-        ]
+        if _SR_NO_PATTERN.match(text):
+            same_row = [
+                s for s in spans
+                if s is not span
+                and abs(((s["bbox"][1] + s["bbox"][3]) / 2) - y_center) < 6
+            ]
 
-        if not same_row:
+            if not same_row:
+                continue
+
+            description = max(same_row, key=lambda s: len(s["text"]))["text"]
+            rows.append((text, description, y_center))
             continue
 
-        description = max(same_row, key=lambda s: len(s["text"]))["text"]
-        rows.append((int(text), description, y_center))
+        merged = _SR_NO_PREFIX_PATTERN.match(text)
+
+        if merged:
+            rows.append((merged.group(1), merged.group(2), y_center))
 
     return rows
 
