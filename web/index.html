@@ -402,10 +402,92 @@
     font-size: 12px;
   }
 
+  #inventory-filter-bar {
+    padding: 10px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid #2a2e37;
+  }
+
+  #inventory-filter-input {
+    width: 100%;
+    padding: 10px 14px;
+    border-radius: 10px;
+    border: 1px solid #3a3f4b;
+    background: #2a2e37;
+    color: var(--text);
+    font-size: 14px;
+  }
+
   #inventory-table-wrap {
     flex: 1;
     overflow: auto;
     padding: 12px 16px;
+  }
+
+  #inventory-table th.sortable {
+    cursor: pointer;
+    user-select: none;
+  }
+
+  #inventory-table th.sortable:hover {
+    color: var(--text);
+  }
+
+  #inventory-table th .sort-indicator {
+    font-size: 10px;
+  }
+
+  #inventory-table td.editable-cell {
+    cursor: pointer;
+  }
+
+  #inventory-table td.editable-cell:not(.editing):hover {
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 3px;
+  }
+
+  #inventory-table td.editing {
+    white-space: normal;
+  }
+
+  .inline-edit {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 140px;
+  }
+
+  .inline-edit-input {
+    width: 100%;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid #3a3f4b;
+    background: #1f232b;
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  .inline-edit-buttons {
+    display: flex;
+    gap: 6px;
+  }
+
+  .inline-edit-buttons button {
+    flex: 1;
+    padding: 6px;
+    border-radius: 6px;
+    border: none;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .inline-edit-save { background: var(--accent); color: white; }
+  .inline-edit-cancel { background: #2a2e37; color: var(--text); }
+
+  .inline-edit-error {
+    color: var(--error);
+    font-size: 11px;
   }
 
   #inventory-table {
@@ -439,6 +521,10 @@
   #inventory-table td.num {
     text-align: right;
     font-variant-numeric: tabular-nums;
+  }
+
+  #inventory-table th.num {
+    text-align: right;
   }
 
   .inventory-row-image {
@@ -764,15 +850,18 @@
       <button id="inventory-close-btn">&larr; Back</button>
       <h2>Full Inventory</h2>
     </div>
+    <div id="inventory-filter-bar">
+      <input id="inventory-filter-input" type="text" placeholder="Filter by category or item name...">
+    </div>
     <div id="inventory-table-wrap">
       <table id="inventory-table">
         <thead>
           <tr>
-            <th>Category</th>
-            <th>Item</th>
+            <th class="sortable" data-sort-key="category">Category <span class="sort-indicator"></span></th>
+            <th class="sortable" data-sort-key="name">Item <span class="sort-indicator"></span></th>
             <th>Image</th>
-            <th class="num">Stock</th>
-            <th class="num">Price</th>
+            <th class="num sortable" data-sort-key="current_quantity">Stock <span class="sort-indicator"></span></th>
+            <th class="num sortable" data-sort-key="cost_price">Price <span class="sort-indicator"></span></th>
           </tr>
         </thead>
         <tbody id="inventory-table-body"></tbody>
@@ -1735,76 +1824,343 @@
     return Number.isInteger(value) ? String(value) : value.toFixed(2);
   }
 
+  // Raw data from the last fetch, plus the owner's current filter/sort
+  // choices -- kept separately from the DOM so filtering/sorting is a
+  // pure client-side re-render (no server round-trip, same "always
+  // fast" reasoning as everything else here) and a save only needs to
+  // refetch, not re-derive these.
+  let inventoryItems = [];
+  let inventorySummary = {};
+  let inventorySort = { key: "category", dir: "asc" };
+  let inventoryFilterText = "";
+
+  // Only one cell can be mid-edit at a time -- opening a new editor
+  // calls this to put any previously-open one back to plain text
+  // first, rather than leaving two editors open at once.
+  let activeEditCleanup = null;
+
+  const inventoryFilterInput = document.getElementById("inventory-filter-input");
+
+  function filteredSortedInventoryItems() {
+    const text = inventoryFilterText.trim().toLowerCase();
+    let items = inventoryItems;
+
+    // Same "match either direction" idea as the chat's search_items,
+    // just applied client-side here since the full list is already
+    // in hand -- matches category OR item name.
+    if (text) {
+      items = items.filter(function (item) {
+        return (
+          (item.name || "").toLowerCase().includes(text) ||
+          (item.category || "").toLowerCase().includes(text)
+        );
+      });
+    }
+
+    const key = inventorySort.key;
+    const dir = inventorySort.dir === "asc" ? 1 : -1;
+
+    return items.slice().sort(function (a, b) {
+      let av = a[key];
+      let bv = b[key];
+
+      if (typeof av !== "number" && typeof bv !== "number") {
+        av = (av || "").toString().toLowerCase();
+        bv = (bv || "").toString().toLowerCase();
+        if (av < bv) return -1 * dir;
+        if (av > bv) return 1 * dir;
+        return 0;
+      }
+
+      return ((av ?? 0) - (bv ?? 0)) * dir;
+    });
+  }
+
+  function updateSortIndicators() {
+    document.querySelectorAll("#inventory-table th[data-sort-key]").forEach(function (th) {
+      const indicator = th.querySelector(".sort-indicator");
+      if (!indicator) return;
+      indicator.textContent =
+        th.dataset.sortKey === inventorySort.key
+          ? (inventorySort.dir === "asc" ? "▲" : "▼")
+          : "";
+    });
+  }
+
+  document.querySelectorAll("#inventory-table th[data-sort-key]").forEach(function (th) {
+    th.addEventListener("click", function () {
+      const key = th.dataset.sortKey;
+
+      if (inventorySort.key === key) {
+        inventorySort.dir = inventorySort.dir === "asc" ? "desc" : "asc";
+      } else {
+        inventorySort.key = key;
+        inventorySort.dir = "asc";
+      }
+
+      renderInventoryTable();
+    });
+  });
+
+  inventoryFilterInput.addEventListener("input", function () {
+    inventoryFilterText = inventoryFilterInput.value;
+    renderInventoryTable();
+  });
+
   async function openInventoryView() {
-    inventoryTableBody.innerHTML = "<tr><td colspan=\"4\">Loading...</td></tr>";
+    inventoryTableBody.innerHTML = "<tr><td colspan=\"5\">Loading...</td></tr>";
     inventoryOverlay.classList.remove("hidden");
 
     try {
       const data = await callApi("/inventory", { method: "GET" });
-      renderInventoryTable(data);
+      inventoryItems = data.items || [];
+      inventorySummary = data.summary || {};
+      renderInventoryTable();
     } catch (err) {
       if (err.message !== "unauthorized") {
         inventoryTableBody.innerHTML =
-          "<tr><td colspan=\"4\">Couldn't load inventory: " +
+          "<tr><td colspan=\"5\">Couldn't load inventory: " +
           err.message + "</td></tr>";
       }
     }
   }
 
-  function renderInventoryTable(data) {
-    const items = data.items || [];
-    const summary = data.summary || {};
+  function renderInventoryTable() {
+    activeEditCleanup = null; // whatever it pointed at is gone, about to be replaced
+
+    const items = filteredSortedInventoryItems();
 
     inventoryTableBody.innerHTML = "";
 
     if (items.length === 0) {
       inventoryTableBody.innerHTML =
-        "<tr><td colspan=\"5\">No items in the catalog yet.</td></tr>";
+        "<tr><td colspan=\"5\">" +
+        (inventoryItems.length === 0
+          ? "No items in the catalog yet."
+          : "No items match that filter.") +
+        "</td></tr>";
     } else {
       items.forEach(function (item) {
-        const row = document.createElement("tr");
-        const isLow =
-          item.reorder_threshold != null &&
-          item.current_quantity <= item.reorder_threshold;
-
-        if (isLow) row.classList.add("low-stock");
-
-        const categoryCell = document.createElement("td");
-        categoryCell.textContent = item.category || "--";
-        row.appendChild(categoryCell);
-
-        const nameCell = document.createElement("td");
-        nameCell.className = "item-name-cell";
-        nameCell.textContent = item.name + (isLow ? " ⚠️" : "");
-        row.appendChild(nameCell);
-
-        const imageCell = document.createElement("td");
-        row.appendChild(imageCell);
-
-        if (item.image_path) {
-          const imgUrl = "/product_images/" + item.image_path.split("/").pop();
-          appendAuthenticatedImage(imageCell, imgUrl, "inventory-row-image");
-        }
-
-        const stockCell = document.createElement("td");
-        stockCell.className = "num";
-        stockCell.textContent = formatQuantity(item.current_quantity);
-        row.appendChild(stockCell);
-
-        const priceCell = document.createElement("td");
-        priceCell.className = "num";
-        priceCell.textContent = item.cost_price != null ? formatMoney(item.cost_price) : "--";
-        row.appendChild(priceCell);
-
-        inventoryTableBody.appendChild(row);
+        inventoryTableBody.appendChild(buildInventoryRow(item));
       });
     }
 
-    document.getElementById("stat-total-items").textContent = summary.total_items ?? "--";
+    document.getElementById("stat-total-items").textContent = inventorySummary.total_items ?? "--";
     document.getElementById("stat-total-units").textContent =
-      summary.total_units != null ? formatQuantity(summary.total_units) : "--";
-    document.getElementById("stat-low-stock").textContent = summary.low_stock_count ?? "--";
-    document.getElementById("stat-total-value").textContent = formatMoney(summary.total_value);
+      inventorySummary.total_units != null ? formatQuantity(inventorySummary.total_units) : "--";
+    document.getElementById("stat-low-stock").textContent = inventorySummary.low_stock_count ?? "--";
+    document.getElementById("stat-total-value").textContent = formatMoney(inventorySummary.total_value);
+
+    updateSortIndicators();
+  }
+
+  function buildInventoryRow(item) {
+    const row = document.createElement("tr");
+    const isLow =
+      item.reorder_threshold != null && item.current_quantity <= item.reorder_threshold;
+
+    if (isLow) row.classList.add("low-stock");
+
+    const categoryCell = document.createElement("td");
+    categoryCell.textContent = item.category || "--";
+    row.appendChild(categoryCell);
+
+    const nameCell = document.createElement("td");
+    nameCell.className = "item-name-cell";
+    nameCell.textContent = item.name + (isLow ? " ⚠️" : "");
+    row.appendChild(nameCell);
+
+    const imageCell = document.createElement("td");
+    row.appendChild(imageCell);
+
+    if (item.image_path) {
+      const imgUrl = "/product_images/" + item.image_path.split("/").pop();
+      appendAuthenticatedImage(imageCell, imgUrl, "inventory-row-image");
+    }
+
+    const stockCell = document.createElement("td");
+    stockCell.className = "num editable-cell";
+    stockCell.textContent = formatQuantity(item.current_quantity);
+    stockCell.title = "Tap to adjust stock";
+    stockCell.addEventListener("click", function () {
+      // Without this guard, clicking anything INSIDE the already-open
+      // editor (the Save button, even just focusing an input) bubbles
+      // up to this same listener and re-triggers openStockEditor,
+      // silently tearing down and rebuilding the editor (fresh inputs,
+      // fresh errorEl) out from under the click that's still being
+      // handled -- confirmed real bug: Save appeared to do nothing,
+      // because by the time its handler resumed after its own await,
+      // the errorEl it was about to update had already been replaced.
+      if (stockCell.classList.contains("editing")) return;
+      openStockEditor(stockCell, item);
+    });
+    row.appendChild(stockCell);
+
+    const priceCell = document.createElement("td");
+    priceCell.className = "num editable-cell";
+    priceCell.textContent = item.cost_price != null ? formatMoney(item.cost_price) : "--";
+    priceCell.title = "Tap to change price";
+    priceCell.addEventListener("click", function () {
+      if (priceCell.classList.contains("editing")) return;
+      openPriceEditor(priceCell, item);
+    });
+    row.appendChild(priceCell);
+
+    return row;
+  }
+
+  // Builds the Save/Cancel pair + wiring shared by both inline
+  // editors below -- the only difference between editing stock and
+  // editing price is which input(s) are shown and which endpoint/
+  // payload gets sent, everything about opening/closing/error-
+  // handling is identical.
+  function buildInlineEditButtons(cell, originalText, onSave) {
+    const errorEl = document.createElement("div");
+    errorEl.className = "inline-edit-error hidden";
+
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "inline-edit-save";
+    saveBtn.textContent = "✓";
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "inline-edit-cancel";
+    cancelBtn.textContent = "✕";
+
+    function cleanup() {
+      cell.classList.remove("editing");
+      cell.innerHTML = "";
+      cell.textContent = originalText;
+      activeEditCleanup = null;
+    }
+
+    cancelBtn.addEventListener("click", cleanup);
+
+    saveBtn.addEventListener("click", async function () {
+      const error = await onSave();
+
+      if (error) {
+        errorEl.textContent = error;
+        errorEl.classList.remove("hidden");
+        return;
+      }
+
+      // Refetch rather than patch the row locally -- this is a small
+      // catalog and a save is a rare, deliberate action, so the
+      // simplicity of always ending up with exactly-correct totals,
+      // low-stock flags, etc. is worth more than avoiding one extra
+      // GET /inventory.
+      await openInventoryView();
+    });
+
+    const btnRow = document.createElement("div");
+    btnRow.className = "inline-edit-buttons";
+    btnRow.appendChild(saveBtn);
+    btnRow.appendChild(cancelBtn);
+
+    return { btnRow: btnRow, errorEl: errorEl, saveBtn: saveBtn, cancelBtn: cancelBtn, cleanup: cleanup };
+  }
+
+  function openStockEditor(cell, item) {
+    if (activeEditCleanup) activeEditCleanup();
+
+    const originalText = cell.textContent;
+    cell.classList.add("editing");
+    cell.innerHTML = "";
+
+    const wrap = document.createElement("div");
+    wrap.className = "inline-edit";
+
+    const qtyInput = document.createElement("input");
+    qtyInput.type = "number";
+    qtyInput.step = "any";
+    qtyInput.value = item.current_quantity;
+    qtyInput.className = "inline-edit-input";
+
+    const reasonInput = document.createElement("input");
+    reasonInput.type = "text";
+    reasonInput.placeholder = "Reason (required)";
+    reasonInput.className = "inline-edit-input";
+
+    const controls = buildInlineEditButtons(cell, originalText, async function () {
+      const newQuantity = parseFloat(qtyInput.value);
+      const reason = reasonInput.value.trim();
+
+      if (Number.isNaN(newQuantity)) return "Enter a valid number.";
+      if (!reason) return "Reason is required -- this is the audit-trail tool for a correction.";
+
+      controls.saveBtn.disabled = true;
+      controls.cancelBtn.disabled = true;
+
+      try {
+        await callApi("/inventory/adjust-stock", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ item: item.name, new_quantity: newQuantity, reason: reason }),
+        });
+        return null;
+      } catch (err) {
+        controls.saveBtn.disabled = false;
+        controls.cancelBtn.disabled = false;
+        return err.message === "unauthorized" ? null : (err.message || "Failed to save.");
+      }
+    });
+
+    wrap.appendChild(qtyInput);
+    wrap.appendChild(reasonInput);
+    wrap.appendChild(controls.btnRow);
+    wrap.appendChild(controls.errorEl);
+
+    cell.appendChild(wrap);
+    activeEditCleanup = controls.cleanup;
+    qtyInput.focus();
+  }
+
+  function openPriceEditor(cell, item) {
+    if (activeEditCleanup) activeEditCleanup();
+
+    const originalText = cell.textContent;
+    cell.classList.add("editing");
+    cell.innerHTML = "";
+
+    const wrap = document.createElement("div");
+    wrap.className = "inline-edit";
+
+    const priceInput = document.createElement("input");
+    priceInput.type = "number";
+    priceInput.step = "any";
+    priceInput.placeholder = "Price";
+    priceInput.value = item.cost_price != null ? item.cost_price : "";
+    priceInput.className = "inline-edit-input";
+
+    const controls = buildInlineEditButtons(cell, originalText, async function () {
+      const newPrice = parseFloat(priceInput.value);
+
+      if (Number.isNaN(newPrice)) return "Enter a valid price.";
+
+      controls.saveBtn.disabled = true;
+      controls.cancelBtn.disabled = true;
+
+      try {
+        await callApi("/inventory/set-price", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ item: item.name, cost_price: newPrice }),
+        });
+        return null;
+      } catch (err) {
+        controls.saveBtn.disabled = false;
+        controls.cancelBtn.disabled = false;
+        return err.message === "unauthorized" ? null : (err.message || "Failed to save.");
+      }
+    });
+
+    wrap.appendChild(priceInput);
+    wrap.appendChild(controls.btnRow);
+    wrap.appendChild(controls.errorEl);
+
+    cell.appendChild(wrap);
+    activeEditCleanup = controls.cleanup;
+    priceInput.focus();
   }
 
   inventoryBtn.addEventListener("click", openInventoryView);

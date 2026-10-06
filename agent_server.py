@@ -246,6 +246,10 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_import_confirm()
         elif self.path == "/import/cancel":
             self._handle_import_cancel()
+        elif self.path == "/inventory/adjust-stock":
+            self._handle_inventory_tool("adjust_stock")
+        elif self.path == "/inventory/set-price":
+            self._handle_inventory_tool("set_price")
         else:
             self._send_json({"error": "not found"}, status=404)
 
@@ -458,6 +462,54 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send_json({"results": results})
 
+    def _handle_inventory_tool(self, tool_name):
+        """
+        Direct stock/price edits from the inventory table view -- same
+        "bypass the LLM entirely" reasoning as GET /inventory itself:
+        this is a structured, deterministic edit the owner is making
+        right there in the table, not a natural-language request that
+        needs resolving, so routing it through a whole chat turn would
+        just be slower and less certain for no benefit. Goes through
+        the same tool_manager as the chat flow (not inventory_db
+        directly), so it gets the same logging and stays the single
+        choke point for every inventory-changing action.
+        """
+        try:
+            body = self._read_json_body()
+        except json.JSONDecodeError:
+            self._send_json({"error": "invalid JSON body"}, status=400)
+            return
+
+        item = (body.get("item") or "").strip()
+
+        if not item:
+            self._send_json({"error": "missing 'item'"}, status=400)
+            return
+
+        arguments = {"item": item}
+
+        if tool_name == "adjust_stock":
+            arguments["new_quantity"] = body.get("new_quantity")
+            arguments["reason"] = body.get("reason")
+        elif tool_name == "set_price":
+            arguments["cost_price"] = body.get("cost_price")
+            arguments["sale_price"] = body.get("sale_price")
+
+        run_logger = RunLogger(f"[inventory table: {tool_name}]")
+        responder.tool_manager.set_logger(run_logger)
+
+        result = responder.tool_manager.execute(tool_name, arguments)
+
+        run_logger.finalize("completed" if result.get("success") else "failed")
+        monitoring.record_request_outcome(
+            f"inventory_{tool_name}", "completed" if result.get("success") else "failed"
+        )
+
+        if result.get("success"):
+            self._send_json({"output": result.get("output")})
+        else:
+            self._send_json({"error": result.get("error") or "failed"}, status=400)
+
     def _handle_import_cancel(self):
         """
         Fire-and-forget signal from the web UI: the owner reviewed an
@@ -511,6 +563,8 @@ def main():
     print('POST /upload {"filename", "mime_type", "content_base64", "hint"?} -> extracted items (no writes)')
     print('POST /import/confirm {"items": [...]} -> applies them, returns per-item results')
     print("GET /inventory -> full catalog + summary totals (table view)")
+    print('POST /inventory/adjust-stock {"item", "new_quantity", "reason"} -> direct stock edit')
+    print('POST /inventory/set-price {"item", "cost_price"?, "sale_price"?} -> direct price edit')
     print("GET /usage -> cumulative LLM calls/tokens/estimated cost, all time")
     print("GET /transcript -> saved conversation log (every /chat and /upload turn)")
     print("GET /stats -> backend-only: auth failures, failure rate, import reject rate")

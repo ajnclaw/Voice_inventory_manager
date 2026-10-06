@@ -35,6 +35,15 @@ def set_category_tool(item, category):
     return _wrap(inventory_db.set_category, item_name=item, category=category)
 
 
+def set_price_tool(item, cost_price=None, sale_price=None):
+    return _wrap(
+        inventory_db.set_price,
+        item_name=item,
+        cost_price=cost_price,
+        sale_price=sale_price,
+    )
+
+
 def add_item_tool(
     name,
     category=None,
@@ -111,6 +120,7 @@ TOOL_FUNCTIONS = {
     "add_item": add_item_tool,
     "rename_item": rename_item_tool,
     "set_category": set_category_tool,
+    "set_price": set_price_tool,
     "search_items": search_items_tool,
     "record_sale": record_sale_tool,
     "record_restock": record_restock_tool,
@@ -222,6 +232,38 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["item", "category"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_price",
+            "description": (
+                "Corrects an existing item's cost and/or sale price -- "
+                "quantity, name, category, and transaction history are "
+                "untouched. Use this when the owner says a price is "
+                "wrong or has changed (e.g. 'oil filter ab 150 ka hai'). "
+                "Give only the field(s) actually changing; the other is "
+                "left as-is."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item": {
+                        "type": "string",
+                        "description": "The item's exact stored name (resolve with search_items first).",
+                    },
+                    "cost_price": {
+                        "type": "number",
+                        "description": "The corrected cost price, if that's what changed.",
+                    },
+                    "sale_price": {
+                        "type": "number",
+                        "description": "The corrected sale price, if that's what changed.",
+                    },
+                },
+                "required": ["item"],
             },
         },
     },

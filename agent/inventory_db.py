@@ -154,6 +154,32 @@ def set_category(item_name, category):
     return {"item": item_name, "category": category}
 
 
+def set_price(item_name, cost_price=None, sale_price=None):
+    """
+    Updates an item's price fields directly -- unlike quantity, price
+    isn't part of the transactions ledger (it's a catalog attribute,
+    not a dated event), so this is a plain column update, not a
+    transaction insert. At least one of cost_price/sale_price must be
+    given; the other is left untouched (not cleared to null) when
+    omitted, so correcting just one doesn't wipe out the other.
+    """
+    if cost_price is None and sale_price is None:
+        raise ValueError("Give at least one of cost_price or sale_price to update.")
+
+    with _connect() as conn:
+        item_row = _get_item_row(conn, item_name)  # raises ItemNotFound if missing
+
+        new_cost = cost_price if cost_price is not None else item_row["cost_price"]
+        new_sale = sale_price if sale_price is not None else item_row["sale_price"]
+
+        conn.execute(
+            "UPDATE items SET cost_price = ?, sale_price = ? WHERE id = ?",
+            (new_cost, new_sale, item_row["id"]),
+        )
+
+    return {"item": item_name, "cost_price": new_cost, "sale_price": new_sale}
+
+
 def add_item(
     name,
     category=None,
