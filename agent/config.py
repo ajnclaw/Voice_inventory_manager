@@ -63,6 +63,22 @@ LLM_PROVIDERS = {
         "api_key": os.environ.get("OPENROUTER_API", ""),
         "default_model": "openai/gpt-4o-mini",
     },
+    "agentrouter": {
+        "base_url": os.environ.get("AGENTROUTER_BASE_URL", "https://agentrouter.org/v1"),
+        "api_key": os.environ.get("AGENTROUTER_API", ""),
+        "default_model": "openai/gpt-4o-mini",
+    },
+    # Google's own OpenAI-compatibility endpoint -- same /chat/completions
+    # shape as every other provider here, so no new SDK dependency (the
+    # `google-genai` package the quickstart sample uses is a separate,
+    # native client this codebase deliberately doesn't need).
+    "gemini": {
+        "base_url": os.environ.get(
+            "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"
+        ),
+        "api_key": os.environ.get("GEMINI_API_KEY", ""),
+        "default_model": "gemini-flash-lite-latest",
+    },
 }
 
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openrouter")

@@ -70,16 +70,27 @@ def _serialize_messages(messages):
                     arguments if isinstance(arguments, str) else json.dumps(arguments)
                 )
 
-                tool_calls_out.append(
-                    {
-                        "id": call_id,
-                        "type": "function",
-                        "function": {
-                            "name": function["name"],
-                            "arguments": arguments_str,
-                        },
-                    }
-                )
+                tool_call_out = {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": function["name"],
+                        "arguments": arguments_str,
+                    },
+                }
+
+                # Gemini-specific passthrough: its OpenAI-compat endpoint
+                # attaches an extra_content.google.thought_signature to
+                # each function call and then *requires* that exact value
+                # echoed back on the same call in the next request, or it
+                # rejects the turn with a 400 (see
+                # https://ai.google.dev/gemini-api/docs/thought-signatures).
+                # Other providers never set this field, so this is a no-op
+                # for them.
+                if call.get("extra_content"):
+                    tool_call_out["extra_content"] = call["extra_content"]
+
+                tool_calls_out.append(tool_call_out)
 
             serialized.append(
                 {
@@ -139,6 +150,11 @@ def _parse_tool_calls(raw_tool_calls):
                             "arguments": arguments,
                         }
                     ),
+                    # See the matching comment in _serialize_messages --
+                    # carried through unchanged so it can be echoed back
+                    # on Gemini's next request. Absent/None for every
+                    # other provider.
+                    "extra_content": call.get("extra_content"),
                 }
             )
         )
