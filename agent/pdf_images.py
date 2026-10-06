@@ -52,19 +52,24 @@ def extract_row_images(pdf_bytes):
             row_images = _match_row_images(page, rows)
 
             for sr_no, description, _y_center in rows:
-                xref = row_images.get(sr_no)
+                rect = row_images.get(sr_no)
 
-                if xref is None:
+                if rect is None:
                     continue
 
                 try:
-                    image_info = doc.extract_image(xref)
+                    # Rendered as a pixmap of the matched region rather
+                    # than extracted as a single raw embedded image --
+                    # see _match_row_images for why: a row's picture is
+                    # often composed of more than one image object, and
+                    # this captures all of them together, flattened
+                    # exactly as the page itself renders that area.
+                    pixmap = page.get_pixmap(clip=rect, matrix=fitz.Matrix(2, 2))
                 except Exception:
                     continue
 
-                ext = image_info.get("ext", "png")
-                filename = f"{uuid.uuid4().hex}.{ext}"
-                (IMAGE_DIR / filename).write_bytes(image_info["image"])
+                filename = f"{uuid.uuid4().hex}.png"
+                (IMAGE_DIR / filename).write_bytes(pixmap.tobytes("png"))
 
                 result.append((normalize(description), f"product_images/{filename}"))
     finally:
@@ -118,39 +123,55 @@ def _find_rows(page):
 
 def _match_row_images(page, rows):
     """
-    Maps each row's Sr No to the xref of the image whose placement on
-    the page is vertically closest to that row's text -- only accepted
-    within a reasonable distance, so a row with genuinely no picture
-    doesn't get one force-assigned from a neighboring row.
+    Maps each row's Sr No to the on-page rectangle covering every image
+    placement that belongs to it, merged into one union rect.
+
+    Previously this picked only the single nearest xref per row and
+    extracted that one embedded image's raw bytes -- but a catalog
+    PDF's product photo is frequently built from more than one image
+    object layered or tiled together (confirmed on a real supplier
+    PDF: a "gasket full" picture that came out as a thin cropped
+    sliver, because only one of several overlapping image objects
+    making up that photo was ever grabbed). Assigning every placement
+    to its nearest row (instead of every row to its single nearest
+    placement) and unioning the rects lets extract_row_images render
+    the whole matched area as one flattened pixmap.
     """
     placements = []
 
     for img in page.get_images(full=True):
         xref = img[0]
-        placements.extend((xref, rect) for rect in page.get_image_rects(xref))
+        placements.extend(page.get_image_rects(xref))
 
-    if not placements:
+    if not placements or not rows:
         return {}
 
     # Images confined above the first row are letterhead/logos, not
     # product pictures -- exclude them using the topmost row as cutoff.
     header_cutoff = min(y for _, _, y in rows) - 40
-    placements = [(x, r) for x, r in placements if r.y0 >= header_cutoff]
+    placements = [r for r in placements if r.y0 >= header_cutoff]
+
+    row_rects = {}
+
+    for rect in placements:
+        y_center = (rect.y0 + rect.y1) / 2
+        best_sr, best_dist = None, None
+
+        for sr_no, _description, row_y in rows:
+            dist = 0 if rect.y0 <= row_y <= rect.y1 else abs(row_y - y_center)
+
+            if best_dist is None or dist < best_dist:
+                best_sr, best_dist = sr_no, dist
+
+        if best_dist is not None and best_dist < 40:
+            row_rects.setdefault(best_sr, []).append(rect)
 
     result = {}
 
-    for sr_no, _description, y_center in rows:
-        best_xref, best_dist = None, None
-
-        for xref, rect in placements:
-            dist = 0 if rect.y0 <= y_center <= rect.y1 else min(
-                abs(rect.y0 - y_center), abs(rect.y1 - y_center)
-            )
-
-            if best_dist is None or dist < best_dist:
-                best_xref, best_dist = xref, dist
-
-        if best_xref is not None and best_dist < 40:
-            result[sr_no] = best_xref
+    for sr_no, rects in row_rects.items():
+        union = rects[0]
+        for rect in rects[1:]:
+            union |= rect
+        result[sr_no] = union
 
     return result
