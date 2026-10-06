@@ -194,6 +194,31 @@ def _call_extraction(content, logger=None, hint=None):
                 f"not real products.)"
             )
 
+        # Backstop for a confirmed real case: a document's FIRST
+        # category heading sometimes doesn't apply to the handful of
+        # item rows immediately above it in the model's view, even
+        # though they sit under that same heading on the actual page
+        # (the raw text-extraction order a multi-column/boxed-heading
+        # PDF layout produces doesn't always match visual top-to-bottom
+        # reading order, so the heading text can come after those rows
+        # in what the model reads). The prompt rule alone ("applies to
+        # items that follow it") is correct for every heading that
+        # appears MID-document, which is the common case this is
+        # deliberately not touching -- it only back-fills a leading run
+        # of uncategorized items up to the document's very first
+        # category, since those are the only ones a text-order glitch
+        # like this could explain.
+        first_category = next(
+            (item.get("category") for item in data["items"] if item.get("category")),
+            None,
+        )
+
+        if first_category:
+            for item in data["items"]:
+                if item.get("category"):
+                    break
+                item["category"] = first_category
+
     data["items"] = _flag_name_conflicts(data["items"])
 
     return data
