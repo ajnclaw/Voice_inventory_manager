@@ -182,44 +182,74 @@
     margin: 0;
   }
 
-  #import-items {
+  /* Import review table -- same visual language as the full inventory
+     view (see #inventory-table), scoped to fit inside the bottom-sheet
+     card. Confirmed complaint: this used to be a column of plain text
+     lines, hard to scan for 90 items at once. */
+  #import-table-wrap {
     overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+    flex: 1;
   }
 
-  .import-item {
-    background: #2a2e37;
-    border-radius: 10px;
-    padding: 10px 12px;
-    font-size: 14px;
-    display: flex;
-    justify-content: space-between;
-    gap: 8px;
+  #import-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
   }
 
-  .import-item .action-tag {
+  #import-table th {
+    text-align: left;
+    color: var(--text-dim);
+    font-weight: 600;
     font-size: 11px;
     text-transform: uppercase;
+    padding: 6px 8px;
+    border-bottom: 1px solid #2a2e37;
+    position: sticky;
+    top: 0;
+    background: var(--panel);
+  }
+
+  #import-table td {
+    padding: 8px;
+    border-bottom: 1px solid #2a2e37;
+    vertical-align: top;
+  }
+
+  #import-table td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  #import-table .import-item-note {
     color: var(--text-dim);
-    flex-shrink: 0;
+    font-size: 11px;
+    margin-top: 2px;
   }
 
-  .import-item.result-success { border-left: 3px solid #4caf50; }
-  .import-item.result-failed { border-left: 3px solid var(--error); }
+  #import-table tr.result-success { background: rgba(76, 175, 80, 0.08); }
+  #import-table tr.result-failed { background: rgba(224, 82, 82, 0.1); }
 
-  .import-item.conflict {
-    border-left: 3px solid #e0a822;
+  #import-table .result-note {
+    font-size: 11px;
+    margin-top: 2px;
   }
 
-  .import-item.conflict .conflict-label {
+  #import-table tr.result-success .result-note { color: #4caf50; }
+  #import-table tr.result-failed .result-note { color: var(--error); }
+
+  #import-table tr.conflict td {
+    background: rgba(224, 168, 34, 0.08);
+  }
+
+  .conflict-label {
     color: #e0a822;
     font-size: 12px;
     margin-bottom: 6px;
   }
 
-  .import-item.conflict input {
+  .conflict-row-body input {
     width: 100%;
     margin-top: 6px;
     padding: 8px 10px;
@@ -232,8 +262,8 @@
 
   .conflict-image {
     display: block;
-    max-width: 100%;
-    max-height: 140px;
+    max-width: 160px;
+    max-height: 120px;
     border-radius: 8px;
     margin-bottom: 8px;
     object-fit: contain;
@@ -421,6 +451,53 @@
     object-fit: contain;
   }
 
+  /* A chat reply carrying a multi-item result (see renderChatItemsTable)
+     needs more room than a normal text bubble -- same table layout as
+     the full inventory view, just compact enough to sit inside a
+     chat message. */
+  .msg.has-table {
+    max-width: 100%;
+  }
+
+  .chat-items-table-wrap {
+    overflow-x: auto;
+    margin-top: 8px;
+    border-radius: 10px;
+    background: #1f232b;
+  }
+
+  .chat-items-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  .chat-items-table th {
+    text-align: left;
+    color: var(--text-dim);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    padding: 7px 8px;
+    border-bottom: 1px solid #2a2e37;
+    white-space: nowrap;
+  }
+
+  .chat-items-table td {
+    padding: 7px 8px;
+    border-bottom: 1px solid #2a2e37;
+  }
+
+  .chat-items-table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .chat-items-table td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
   .msg-file-chip {
     display: flex;
     align-items: center;
@@ -576,7 +653,21 @@
     <div id="import-card">
       <h2>Review before saving</h2>
       <p id="import-summary"></p>
-      <div id="import-items"></div>
+      <div id="import-table-wrap">
+        <table id="import-table">
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>Item</th>
+              <th>Image</th>
+              <th class="num">Qty</th>
+              <th class="num">Price</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="import-table-body"></tbody>
+        </table>
+      </div>
       <div id="import-actions">
         <button id="import-cancel-btn">Cancel</button>
         <button id="import-confirm-btn">Confirm &amp; Save</button>
@@ -648,7 +739,7 @@
   const fileInput = document.getElementById("file-input");
   const importOverlay = document.getElementById("import-overlay");
   const importSummary = document.getElementById("import-summary");
-  const importItemsEl = document.getElementById("import-items");
+  const importTableBody = document.getElementById("import-table-body");
   const importCancelBtn = document.getElementById("import-cancel-btn");
   const importConfirmBtn = document.getElementById("import-confirm-btn");
   const hintOverlay = document.getElementById("hint-overlay");
@@ -754,6 +845,76 @@
   async function appendImageToMessage(el, imageUrl) {
     const body = el.querySelector(".msg-body");
     if (body) await appendAuthenticatedImage(body, imageUrl, "msg-image");
+  }
+
+  // Renders a multi-item chat result (search_items matching several
+  // things, list_inventory, list_low_stock) as a real table instead of
+  // the model describing each item in a paragraph -- confirmed
+  // complaint: asking about "fuel filter" came back as 4 products'
+  // worth of prose. Same Category/Item/Image/Stock/Price layout as the
+  // full inventory view, sorted by category (already done server-side
+  // in agent_server.py's _serialize_item_list, but sorted again here
+  // too since it's cheap and keeps this function correct even if a
+  // future caller hands it unsorted data).
+  function renderChatItemsTable(el, items) {
+    const body = el.querySelector(".msg-body");
+    if (!body || !items || items.length === 0) return;
+
+    el.classList.add("has-table");
+
+    const sorted = items.slice().sort(function (a, b) {
+      const catA = (a.category || "").toLowerCase();
+      const catB = (b.category || "").toLowerCase();
+      if (catA !== catB) return catA < catB ? -1 : 1;
+      return (a.name || "").localeCompare(b.name || "");
+    });
+
+    const wrap = document.createElement("div");
+    wrap.className = "chat-items-table-wrap";
+
+    const table = document.createElement("table");
+    table.className = "chat-items-table";
+    table.innerHTML =
+      "<thead><tr><th>Category</th><th>Item</th><th>Image</th>" +
+      "<th class=\"num\">Stock</th><th class=\"num\">Price</th></tr></thead>";
+
+    const tbody = document.createElement("tbody");
+
+    sorted.forEach(function (item) {
+      const row = document.createElement("tr");
+
+      const categoryCell = document.createElement("td");
+      categoryCell.textContent = item.category || "--";
+      row.appendChild(categoryCell);
+
+      const nameCell = document.createElement("td");
+      nameCell.textContent = item.name || "";
+      row.appendChild(nameCell);
+
+      const imageCell = document.createElement("td");
+      row.appendChild(imageCell);
+      if (item.image_url) {
+        appendAuthenticatedImage(imageCell, item.image_url, "inventory-row-image");
+      }
+
+      const stockCell = document.createElement("td");
+      stockCell.className = "num";
+      stockCell.textContent =
+        item.current_quantity != null ? formatQuantity(item.current_quantity) : "--";
+      row.appendChild(stockCell);
+
+      const priceCell = document.createElement("td");
+      priceCell.className = "num";
+      priceCell.textContent =
+        item.cost_price != null ? formatMoney(item.cost_price) : "--";
+      row.appendChild(priceCell);
+
+      tbody.appendChild(row);
+    });
+
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    body.appendChild(wrap);
   }
 
   // Like addMessage, but shows the actual attached image inline (or a
@@ -926,7 +1087,9 @@
       pending.className = "msg assistant";
       speak(data.reply);
 
-      if (data.image_url) {
+      if (data.items && data.items.length > 0) {
+        renderChatItemsTable(pending, data.items);
+      } else if (data.image_url) {
         appendImageToMessage(pending, data.image_url);
       }
     } catch (err) {
@@ -1020,26 +1183,18 @@
     return commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl;
   }
 
-  function describeItem(entry) {
-    const label = ACTION_LABELS[entry.action] || entry.action;
-    let line = `${label}: ${entry.item}`;
+  function formatImportQty(entry) {
+    if (entry.quantity == null) return "--";
 
     if (entry.action === "adjustment") {
       // quantity is a CHANGE here (negative = lost/damaged, positive =
       // found extra), not a final count -- show the sign explicitly
       // so it doesn't read like an absolute total.
-      if (entry.quantity != null) {
-        const sign = entry.quantity > 0 ? "+" : "";
-        line += ` (${sign}${entry.quantity})`;
-      }
-    } else if (entry.quantity != null) {
-      line += ` x${entry.quantity}`;
+      const sign = entry.quantity > 0 ? "+" : "";
+      return `${sign}${entry.quantity}`;
     }
 
-    if (entry.unit_price != null) line += ` @ Rs${entry.unit_price}`;
-    if (entry.action === "adjustment" && entry.reason) line += ` -- ${entry.reason}`;
-
-    return line;
+    return String(entry.quantity);
   }
 
   // Inputs for items the backend flagged as name_conflict (see
@@ -1066,20 +1221,40 @@
     conflictInputs = [];
 
     importSummary.textContent = data.summary || "";
-    importItemsEl.innerHTML = "";
+    importTableBody.innerHTML = "";
 
     if (pendingItems.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "import-item";
-      empty.textContent = "Nothing usable was found in that file.";
-      importItemsEl.appendChild(empty);
+      importTableBody.innerHTML =
+        "<tr><td colspan=\"6\">Nothing usable was found in that file.</td></tr>";
       importConfirmBtn.disabled = true;
     } else {
-      pendingItems.forEach(function (entry, index) {
-        const row = document.createElement("div");
+      // Sorted by category for display (same inventory-table layout
+      // the owner asked for), but every row keeps its ORIGINAL
+      // pendingItems index in data-item-index -- apply_import_items
+      // runs and returns results in that original order, not display
+      // order, so result-matching and the conflict-input write-back
+      // both key off this rather than DOM position.
+      const order = pendingItems.map(function (_entry, index) { return index; });
+      order.sort(function (a, b) {
+        const catA = (pendingItems[a].category || "").toLowerCase();
+        const catB = (pendingItems[b].category || "").toLowerCase();
+        if (catA !== catB) return catA < catB ? -1 : 1;
+        return (pendingItems[a].item || "").localeCompare(pendingItems[b].item || "");
+      });
+
+      order.forEach(function (index) {
+        const entry = pendingItems[index];
+        const row = document.createElement("tr");
+        row.dataset.itemIndex = String(index);
 
         if (entry.name_conflict) {
-          row.className = "import-item conflict";
+          row.className = "conflict";
+
+          const cell = document.createElement("td");
+          cell.colSpan = 6;
+
+          const inner = document.createElement("div");
+          inner.className = "conflict-row-body";
 
           // Each conflicting item was matched to its own picture from
           // the source PDF during extraction (see pdf_images.py) --
@@ -1088,29 +1263,63 @@
           // and immediately tell which real part this row is.
           if (entry.image_path) {
             const imgUrl = "/product_images/" + entry.image_path.split("/").pop();
-            appendAuthenticatedImage(row, imgUrl, "conflict-image");
+            appendAuthenticatedImage(inner, imgUrl, "conflict-image");
           }
 
           const label = document.createElement("div");
           label.className = "conflict-label";
           label.textContent =
-            "⚠️ Same name as another item, different price (Rs " +
-            entry.unit_price + ") -- give this one a distinct name:";
-          row.appendChild(label);
+            "⚠️ Same name as another item below -- give this one a distinct name:";
+          inner.appendChild(label);
 
           const input = document.createElement("input");
           input.type = "text";
-          input.value = entry.item + " (Rs " + entry.unit_price + ")";
+          input.value = entry.suggested_name || entry.item;
           input.addEventListener("input", updateConfirmEnabled);
-          row.appendChild(input);
+          inner.appendChild(input);
+
+          cell.appendChild(inner);
+          row.appendChild(cell);
 
           conflictInputs.push({ index: index, input: input });
         } else {
-          row.className = "import-item";
-          row.textContent = describeItem(entry);
+          const categoryCell = document.createElement("td");
+          categoryCell.textContent = entry.category || "--";
+          row.appendChild(categoryCell);
+
+          const itemCell = document.createElement("td");
+          itemCell.textContent = entry.item || "";
+          if (entry.action === "adjustment" && entry.reason) {
+            const note = document.createElement("div");
+            note.className = "import-item-note";
+            note.textContent = entry.reason;
+            itemCell.appendChild(note);
+          }
+          row.appendChild(itemCell);
+
+          const imageCell = document.createElement("td");
+          row.appendChild(imageCell);
+          if (entry.image_path) {
+            const imgUrl = "/product_images/" + entry.image_path.split("/").pop();
+            appendAuthenticatedImage(imageCell, imgUrl, "inventory-row-image");
+          }
+
+          const qtyCell = document.createElement("td");
+          qtyCell.className = "num";
+          qtyCell.textContent = formatImportQty(entry);
+          row.appendChild(qtyCell);
+
+          const priceCell = document.createElement("td");
+          priceCell.className = "num";
+          priceCell.textContent = entry.unit_price != null ? formatMoney(entry.unit_price) : "--";
+          row.appendChild(priceCell);
+
+          const actionCell = document.createElement("td");
+          actionCell.textContent = ACTION_LABELS[entry.action] || entry.action;
+          row.appendChild(actionCell);
         }
 
-        importItemsEl.appendChild(row);
+        importTableBody.appendChild(row);
       });
     }
 
@@ -1128,17 +1337,23 @@
   }
 
   function renderImportResults(results) {
-    const rows = importItemsEl.children;
-
     results.forEach(function (result, index) {
-      const row = rows[index];
+      const row = importTableBody.querySelector(
+        'tr[data-item-index="' + index + '"]'
+      );
 
       if (!row) return;
 
       row.classList.add(result.success ? "result-success" : "result-failed");
 
       if (!result.success && result.error) {
-        row.textContent += " -- FAILED: " + result.error;
+        const note = document.createElement("div");
+        note.className = "result-note";
+        note.textContent = "FAILED: " + result.error;
+        // Last cell in a normal row is Action; a conflict row's only
+        // cell is the colspan-6 one -- either way, the last cell is
+        // the right place to attach this.
+        row.lastElementChild.appendChild(note);
       }
     });
 

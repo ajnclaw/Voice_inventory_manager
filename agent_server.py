@@ -88,6 +88,45 @@ responder = Responder()
 history = []
 
 
+def _serialize_item_list(items):
+    """
+    Turns a multi-item tool result (search_items/list_inventory/
+    list_low_stock, see responder.py's last_item_list) into what the
+    web UI's chat-reply table needs: image_path -> image_url (same
+    "/product_images/<filename>" shape as the single-item image_url
+    field, so the frontend's existing authenticated-image fetch works
+    unchanged), sorted by category so related items group together
+    the way the owner actually asked for, rather than whatever order
+    the tool happened to return them in.
+    """
+    if not items:
+        return None
+
+    def sort_key(item):
+        return (
+            (item.get("category") or "").lower(),
+            (item.get("name") or "").lower(),
+        )
+
+    serialized = []
+
+    for item in sorted(items, key=sort_key):
+        image_path = item.get("image_path")
+        serialized.append(
+            {
+                "name": item.get("name"),
+                "category": item.get("category"),
+                "current_quantity": item.get("current_quantity"),
+                "cost_price": item.get("cost_price"),
+                "image_url": f"/product_images/{image_path.split('/')[-1]}"
+                if image_path
+                else None,
+            }
+        )
+
+    return serialized
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, payload, status=200):
         body = json.dumps(payload).encode("utf-8")
@@ -234,11 +273,13 @@ class Handler(BaseHTTPRequestHandler):
         responder.set_logger(run_logger)
 
         image_path = None
+        items = None
 
         try:
             result = responder.respond(user_input, history=history)
             reply = result["reply"]
             image_path = result.get("image_path")
+            items = result.get("items")
             status = "completed"
         except Exception as exc:
             reply = f"Something went wrong: {exc}"
@@ -277,6 +318,7 @@ class Handler(BaseHTTPRequestHandler):
                 "image_url": f"/product_images/{image_path.split('/')[-1]}"
                 if image_path
                 else None,
+                "items": _serialize_item_list(items),
             }
         )
 
@@ -465,7 +507,7 @@ def main():
 
     print(f"Inventory agent listening on http://{HOST}:{PORT}")
     print(f"LLM provider: {LLM_PROVIDER} (model: {DEFAULT_MODEL})")
-    print('POST /chat {"message": "..."} -> {"reply": "...", "status": "..."}')
+    print('POST /chat {"message": "..."} -> {"reply", "status", "image_url"?, "items"?}')
     print('POST /upload {"filename", "mime_type", "content_base64", "hint"?} -> extracted items (no writes)')
     print('POST /import/confirm {"items": [...]} -> applies them, returns per-item results')
     print("GET /inventory -> full catalog + summary totals (table view)")

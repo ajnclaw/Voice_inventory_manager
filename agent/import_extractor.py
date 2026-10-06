@@ -257,18 +257,25 @@ def _call_extraction(content, logger=None, hint=None):
 
 def _flag_name_conflicts(items):
     """
-    Marks items whose name collides with another item's but whose
-    price differs -- the strong real-world signal (confirmed on an
-    actual supplier catalog during testing: two genuinely different
-    parts, distinguished only by a picture the text extraction can't
-    see, both just called "170F FLYWHEEL FAN" at different prices)
-    that these are actually different products, not a duplicate
-    extraction. add_item enforces unique names, so confirming these
-    as-is would silently fail on every item after the first in the
-    group -- flagging them here lets the web UI ask the owner to tell
-    them apart before applying anything, rather than after a failed
-    write. Same name + same price is left alone (nothing to tell apart
-    -- more likely the same line read twice, harmless either way).
+    Marks every item whose name collides with another item's in this
+    same batch -- add_item enforces unique names, so confirming two
+    same-named items as-is would silently fail the second one at
+    apply time no matter what (even with identical prices: same name
+    + same everything is still a UNIQUE constraint violation, not a
+    harmless no-op). Flagging them here lets the web UI ask the owner
+    to tell them apart before applying anything, rather than after a
+    failed write.
+
+    Each flagged item also gets a "suggested_name" the owner can
+    accept as-is or edit, built from whatever actually differs within
+    the group -- price (the strong real-world signal confirmed on an
+    actual supplier catalog: two genuinely different parts,
+    distinguished only by a picture the text extraction can't see,
+    both just called "170F FLYWHEEL FAN" at different prices), line
+    number, or category, in that order. If nothing distinguishes them
+    at all (a true duplicate, most likely the same line read twice),
+    falls back to a plain ordinal so the suggestion is at least
+    unique -- the owner can still edit it to something better.
     """
     by_name = {}
 
@@ -280,13 +287,38 @@ def _flag_name_conflicts(items):
         if len(indices) < 2:
             continue
 
-        prices = {items[i].get("unit_price") for i in indices}
-
-        if len(prices) > 1:
-            for i in indices:
-                items[i]["name_conflict"] = True
+        for position, i in enumerate(indices):
+            items[i]["name_conflict"] = True
+            items[i]["suggested_name"] = _suggest_distinct_name(
+                items, indices, i, position
+            )
 
     return items
+
+
+def _suggest_distinct_name(items, indices, i, position):
+    item = items[i]
+    base = (item.get("item") or "").strip()
+
+    prices = {items[j].get("unit_price") for j in indices}
+    line_numbers = {items[j].get("line_number") for j in indices}
+    categories = {items[j].get("category") for j in indices}
+
+    parts = []
+
+    if len(prices) > 1 and item.get("unit_price") is not None:
+        parts.append(f"Rs {item['unit_price']}")
+
+    if len(line_numbers) > 1 and item.get("line_number"):
+        parts.append(item["line_number"])
+
+    if len(categories) > 1 and item.get("category"):
+        parts.append(item["category"])
+
+    if not parts:
+        parts.append(f"duplicate {position + 1}")
+
+    return f"{base} ({', '.join(parts)})"
 
 
 def extract_from_text(text, logger=None, hint=None):

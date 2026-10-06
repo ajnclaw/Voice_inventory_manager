@@ -81,6 +81,20 @@ says otherwise -- don't default to dollars.
 Do not claim you looked something up or recorded something unless you
 actually called a tool and got a real result back.
 
+When search_items, list_inventory, or list_low_stock returns MORE
+THAN ONE item, do not enumerate each item's details in your reply
+(name, stock, price, etc. for every one) -- the app shows the full
+list separately as a proper table, so repeating it in prose is just
+redundant and reads worse. Instead give a brief one-line reply: how
+many were found, or a short natural sentence, e.g. "4 fuel filters
+mile, neeche dekh lo" ("found 4 fuel filters, take a look below").
+If the owner's question needs more than that (e.g. they asked you to
+total something up or pick the cheapest one), answer that specific
+question concisely -- just don't re-describe every item one by one
+when the table already will. A single-item result (search_items
+finding exactly one match, or check_stock) is unaffected by this --
+describe that one normally.
+
 Recent conversation history may be included for context; use it only
 to understand what was discussed, not as something to repeat back.
 """
@@ -206,6 +220,16 @@ class Responder:
         # separately by the web UI.
         last_item_image = None
 
+        # Same idea for a MULTI-item result (search_items matching
+        # several things, list_inventory, list_low_stock): confirmed
+        # real complaint -- asking about "fuel filter" got back a
+        # paragraph of prose describing 4 products, instead of
+        # something scannable. The web UI renders this as a real
+        # table (same layout as the full inventory view) instead of
+        # trusting the model to format a list of items readably in
+        # text -- see the "don't enumerate" rule in SYSTEM_PROMPT.
+        last_item_list = None
+
         for iteration in range(max_iterations):
             response = chat(
                 "responder",
@@ -225,6 +249,7 @@ class Responder:
                         strip_markdown(response.message.content or "")
                     ),
                     "image_path": last_item_image,
+                    "items": last_item_list,
                 }
 
             for tool_call in tool_calls:
@@ -238,12 +263,17 @@ class Responder:
 
                     if tool_name == "check_stock" and isinstance(output, dict):
                         last_item_image = output.get("image_path") or last_item_image
-                    elif (
-                        tool_name == "search_items"
-                        and isinstance(output, list)
-                        and len(output) == 1
-                    ):
-                        last_item_image = output[0].get("image_path") or last_item_image
+                    elif tool_name in (
+                        "search_items",
+                        "list_inventory",
+                        "list_low_stock",
+                    ) and isinstance(output, list):
+                        if len(output) == 1:
+                            last_item_image = (
+                                output[0].get("image_path") or last_item_image
+                            )
+                        elif len(output) > 1:
+                            last_item_list = output
 
                 messages.append(
                     {
@@ -259,4 +289,5 @@ class Responder:
                 "could you rephrase or try again?"
             ),
             "image_path": last_item_image,
+            "items": last_item_list,
         }
