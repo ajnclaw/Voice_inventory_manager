@@ -273,7 +273,7 @@
     border-bottom: 1px solid #2a2e37;
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 14px;
   }
 
   #inventory-header h2 {
@@ -320,13 +320,22 @@
     border-bottom: 1px solid #1f232b;
   }
 
-  #inventory-table tr.low-stock td:first-child {
+  #inventory-table tr.low-stock td.item-name-cell {
     color: var(--error);
   }
 
   #inventory-table td.num {
     text-align: right;
     font-variant-numeric: tabular-nums;
+  }
+
+  .inventory-row-image {
+    display: block;
+    width: 40px;
+    height: 40px;
+    object-fit: contain;
+    border-radius: 6px;
+    background: #1f232b;
   }
 
   #inventory-summary-bar {
@@ -579,17 +588,18 @@
        LLM involved, so it's always exact and always fast. -->
   <div id="inventory-overlay" class="hidden">
     <div id="inventory-header">
+      <button id="inventory-close-btn">&larr; Back</button>
       <h2>Full Inventory</h2>
-      <button id="inventory-close-btn">Close</button>
     </div>
     <div id="inventory-table-wrap">
       <table id="inventory-table">
         <thead>
           <tr>
-            <th>Item</th>
             <th>Category</th>
-            <th class="num">Qty</th>
-            <th class="num">Unit</th>
+            <th>Item</th>
+            <th>Image</th>
+            <th class="num">Stock</th>
+            <th class="num">Price</th>
           </tr>
         </thead>
         <tbody id="inventory-table-body"></tbody>
@@ -1320,7 +1330,7 @@
 
     if (items.length === 0) {
       inventoryTableBody.innerHTML =
-        "<tr><td colspan=\"4\">No items in the catalog yet.</td></tr>";
+        "<tr><td colspan=\"5\">No items in the catalog yet.</td></tr>";
     } else {
       items.forEach(function (item) {
         const row = document.createElement("tr");
@@ -1330,11 +1340,32 @@
 
         if (isLow) row.classList.add("low-stock");
 
-        row.innerHTML =
-          "<td>" + item.name + (isLow ? " ⚠️" : "") + "</td>" +
-          "<td>" + (item.category || "--") + "</td>" +
-          "<td class=\"num\">" + formatQuantity(item.current_quantity) + "</td>" +
-          "<td class=\"num\">" + item.unit + "</td>";
+        const categoryCell = document.createElement("td");
+        categoryCell.textContent = item.category || "--";
+        row.appendChild(categoryCell);
+
+        const nameCell = document.createElement("td");
+        nameCell.className = "item-name-cell";
+        nameCell.textContent = item.name + (isLow ? " ⚠️" : "");
+        row.appendChild(nameCell);
+
+        const imageCell = document.createElement("td");
+        row.appendChild(imageCell);
+
+        if (item.image_path) {
+          const imgUrl = "/product_images/" + item.image_path.split("/").pop();
+          appendAuthenticatedImage(imageCell, imgUrl, "inventory-row-image");
+        }
+
+        const stockCell = document.createElement("td");
+        stockCell.className = "num";
+        stockCell.textContent = formatQuantity(item.current_quantity);
+        row.appendChild(stockCell);
+
+        const priceCell = document.createElement("td");
+        priceCell.className = "num";
+        priceCell.textContent = item.cost_price != null ? formatMoney(item.cost_price) : "--";
+        row.appendChild(priceCell);
 
         inventoryTableBody.appendChild(row);
       });
