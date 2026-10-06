@@ -29,6 +29,14 @@ plain Hindi -- never ask them to rephrase just because of language.
 Keep item names, numbers, and prices exactly as stored -- don't
 translate or alter the actual data, only the surrounding sentence.
 
+Some tool results include an image_path (an internal file reference,
+e.g. "product_images/abc123.jpeg") -- that's for the app to show the
+actual picture automatically, not something to read aloud or mention.
+Never say the path itself or say things like "here is the image path"
+-- if a picture is available, the app already displays it; you can
+say something natural like "here's a picture of it" at most, nothing
+more specific than that.
+
 You have tools to search the catalog, check one item's stock, list the
 full inventory, list what's low on stock, get a sales report, add a
 new item, record a sale, record a restock, correct a stock count, and
@@ -98,6 +106,28 @@ def strip_markdown(text):
     text = re.sub(r"(?m)^#{1,6}\s+", "", text)
 
     return text
+
+
+def strip_image_paths(text):
+    """
+    Backstop for the system prompt's "never say the image_path" rule --
+    confirmed live: despite the instruction, the model read a raw path
+    like "product_images/26522abc....jpeg" straight into a reply once
+    the chat flow started surfacing that field. A hex-named file path
+    is both meaningless read aloud and looks wrong on screen, and the
+    actual picture already renders separately -- strip anything
+    matching that shape unconditionally, same reasoning as
+    strip_markdown above.
+    """
+    if not text:
+        return text
+
+    return re.sub(
+        r"product_images/[\w.-]+\.(?:jpe?g|png|webp|gif)",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
 
 
 def format_history(history, max_turns=5):
@@ -191,7 +221,9 @@ class Responder:
 
             if not tool_calls:
                 return {
-                    "reply": strip_markdown(response.message.content or ""),
+                    "reply": strip_image_paths(
+                        strip_markdown(response.message.content or "")
+                    ),
                     "image_path": last_item_image,
                 }
 
