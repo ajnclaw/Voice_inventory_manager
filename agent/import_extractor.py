@@ -133,13 +133,16 @@ Rules:
   standalone item with a null price.
 - If a row has a Sr No / serial number / item code printed next to it
   (a numbered or lettered-and-numbered column at the start of the
-  row, e.g. "1", "23", "EA07"), always capture it in "line_number"
-  exactly as written, even if you also include it as part of the item
-  name itself. This is the exact identifier a separate, independent
-  pass over the document's pictures uses to match each product photo
-  to the right row -- getting it right (or leaving it null when there
-  genuinely isn't one) matters more than it might look, so don't
-  guess or invent a number that isn't actually printed there.
+  row, e.g. "1", "23", "EA07"), capture it ONLY in "line_number",
+  exactly as written -- never as part of "item" too. It's a row
+  position in this document, not part of the product's actual name;
+  "item" should read naturally on its own ("Piston Ring Set 63 CC
+  /68 CC", not "EA07 Piston Ring Set 63 CC /68 CC"). line_number is
+  the exact identifier a separate, independent pass over the
+  document's pictures uses to match each product photo to the right
+  row -- getting it right (or leaving it null when there genuinely
+  isn't one) matters more than it might look, so don't guess or
+  invent a number that isn't actually printed there.
 - If the text/image is in Hinglish or Hindi, understand it the same
   way as English -- extract the item name as written, don't translate
   it into a different language.
@@ -182,6 +185,24 @@ def _call_extraction(content, logger=None, hint=None):
 
     data.setdefault("items", [])
     data.setdefault("summary", "")
+
+    # Backstop for the "line_number isn't part of the name" rule --
+    # the prompt instruction alone proved unreliable in testing (same
+    # pattern as every other backstop in this file): confirmed real
+    # case, items came back as "EA01 Recoil Stater ..." with
+    # line_number ALSO correctly set to "EA01", i.e. the code ended up
+    # in both places despite being told not to duplicate it. Strip it
+    # from the front of the name in code whenever it's there, rather
+    # than trusting the model never to repeat it.
+    for item in data["items"]:
+        line_number = (item.get("line_number") or "").strip()
+        name = (item.get("item") or "").strip()
+
+        if line_number and name.lower().startswith(line_number.lower()):
+            remainder = name[len(line_number):].lstrip(" -.:)")
+
+            if remainder:
+                item["item"] = remainder
 
     if hint == "catalog":
         # Backstop, not just a prompt instruction (which alone proved
