@@ -270,6 +270,88 @@
     background: #1f232b;
   }
 
+  /* An imported row whose name exactly matches an item already in the
+     catalog -- see _flag_existing_matches. Styled distinctly from a
+     same-batch name_conflict (blue, not amber) since it's a different
+     question: "is this the same product?" vs "tell these two apart". */
+  #import-table tr.existing-match td {
+    background: rgba(45, 108, 223, 0.1);
+  }
+
+  .existing-match-label {
+    color: var(--accent);
+    font-size: 12px;
+    margin-bottom: 8px;
+  }
+
+  .existing-match-compare {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .existing-match-col {
+    flex: 1;
+    background: #1f232b;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+
+  .existing-match-col-title {
+    color: var(--text-dim);
+    font-size: 11px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .existing-match-col img {
+    display: block;
+    width: 100%;
+    max-height: 90px;
+    object-fit: contain;
+    border-radius: 6px;
+    margin-bottom: 6px;
+    background: #15181e;
+  }
+
+  .existing-match-col div.field {
+    padding: 1px 0;
+  }
+
+  .existing-match-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .existing-match-actions button {
+    flex: 1;
+    padding: 10px;
+    border-radius: 8px;
+    border: none;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .existing-match-restock-btn { background: var(--accent); color: white; }
+  .existing-match-new-btn { background: #2a2e37; color: var(--text); }
+
+  .existing-match-name-input {
+    width: 100%;
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid #3a3f4b;
+    background: #1f232b;
+    color: var(--text);
+    font-size: 14px;
+  }
+
+  .existing-match-resolved {
+    font-size: 13px;
+    color: #4caf50;
+  }
+
   #import-actions {
     display: flex;
     gap: 8px;
@@ -1208,17 +1290,38 @@
   // confirm time.
   let conflictInputs = [];
 
+  // Rows flagged by _flag_existing_matches -- the imported name exactly
+  // matches something already in the catalog, and the system
+  // deliberately doesn't guess whether that means "update this" or
+  // "actually a different product" (see the comment on
+  // _flag_existing_matches). Each entry tracks which of those two the
+  // owner picked: mode starts "pending" (blocks Confirm), becomes
+  // "restock" (pendingItems already mutated directly, nothing left to
+  // resolve) or "new" (needs a typed, distinct name via `input`).
+  let existingMatchResolutions = [];
+
   function updateConfirmEnabled() {
-    const allResolved = conflictInputs.every(function (entry) {
+    const conflictsResolved = conflictInputs.every(function (entry) {
       return entry.input.value.trim().length > 0;
     });
 
-    importConfirmBtn.disabled = pendingItems.length === 0 || !allResolved;
+    const existingMatchesResolved = existingMatchResolutions.every(function (entry) {
+      if (entry.mode === "restock") return true;
+      if (entry.mode === "new") {
+        const value = entry.input.value.trim();
+        return value.length > 0 && value.toLowerCase() !== entry.existingName.toLowerCase();
+      }
+      return false; // still "pending" -- owner hasn't picked yet
+    });
+
+    importConfirmBtn.disabled =
+      pendingItems.length === 0 || !conflictsResolved || !existingMatchesResolved;
   }
 
   function renderImportPreview(data) {
     pendingItems = Array.isArray(data.items) ? data.items : [];
     conflictInputs = [];
+    existingMatchResolutions = [];
 
     importSummary.textContent = data.summary || "";
     importTableBody.innerHTML = "";
@@ -1282,6 +1385,106 @@
           row.appendChild(cell);
 
           conflictInputs.push({ index: index, input: input });
+        } else if (entry.existing_item_match) {
+          row.className = "existing-match";
+
+          const cell = document.createElement("td");
+          cell.colSpan = 6;
+
+          const inner = document.createElement("div");
+          inner.className = "existing-match-body";
+
+          const existing = entry.existing_item || {};
+
+          const label = document.createElement("div");
+          label.className = "existing-match-label";
+          label.textContent =
+            '🔵 "' + entry.item + '" already exists in your inventory -- ' +
+            "is this the same product?";
+          inner.appendChild(label);
+
+          const compare = document.createElement("div");
+          compare.className = "existing-match-compare";
+
+          const existingCol = document.createElement("div");
+          existingCol.className = "existing-match-col";
+          existingCol.innerHTML =
+            '<div class="existing-match-col-title">Existing item</div>' +
+            '<div class="field">' + (existing.category || "--") + '</div>' +
+            '<div class="field">Stock: ' + formatQuantity(existing.current_quantity) + '</div>' +
+            '<div class="field">Price: ' + (existing.cost_price != null ? formatMoney(existing.cost_price) : "--") + '</div>';
+          if (existing.image_path) {
+            const imgUrl = "/product_images/" + existing.image_path.split("/").pop();
+            appendAuthenticatedImage(existingCol, imgUrl, "");
+          }
+          compare.appendChild(existingCol);
+
+          const newCol = document.createElement("div");
+          newCol.className = "existing-match-col";
+          newCol.innerHTML =
+            '<div class="existing-match-col-title">This import row</div>' +
+            '<div class="field">' + (entry.category || "--") + '</div>' +
+            '<div class="field">Qty: ' + formatImportQty(entry) + '</div>' +
+            '<div class="field">Price: ' + (entry.unit_price != null ? formatMoney(entry.unit_price) : "--") + '</div>';
+          if (entry.image_path) {
+            const imgUrl = "/product_images/" + entry.image_path.split("/").pop();
+            appendAuthenticatedImage(newCol, imgUrl, "");
+          }
+          compare.appendChild(newCol);
+
+          inner.appendChild(compare);
+
+          const actions = document.createElement("div");
+          actions.className = "existing-match-actions";
+
+          const resolution = { index: index, mode: "pending", input: null, existingName: existing.name || entry.item };
+          existingMatchResolutions.push(resolution);
+
+          const nameInput = document.createElement("input");
+          nameInput.type = "text";
+          nameInput.className = "existing-match-name-input hidden";
+          nameInput.value = entry.item;
+          nameInput.addEventListener("input", updateConfirmEnabled);
+
+          const resolvedNote = document.createElement("div");
+          resolvedNote.className = "existing-match-resolved hidden";
+
+          const restockBtn = document.createElement("button");
+          restockBtn.className = "existing-match-restock-btn";
+          restockBtn.textContent = "Update existing item";
+          restockBtn.addEventListener("click", function () {
+            pendingItems[index].action = "restock";
+            pendingItems[index].item = existing.name;
+            resolution.mode = "restock";
+            actions.classList.add("hidden");
+            nameInput.classList.add("hidden");
+            resolvedNote.classList.remove("hidden");
+            resolvedNote.textContent =
+              "✓ Will restock \"" + existing.name + "\" by " + formatImportQty(entry) +
+              (entry.unit_price != null ? " @ " + formatMoney(entry.unit_price) : "");
+            updateConfirmEnabled();
+          });
+
+          const newBtn = document.createElement("button");
+          newBtn.className = "existing-match-new-btn";
+          newBtn.textContent = "Keep as new item";
+          newBtn.addEventListener("click", function () {
+            resolution.mode = "new";
+            resolution.input = nameInput;
+            actions.classList.add("hidden");
+            nameInput.classList.remove("hidden");
+            nameInput.focus();
+            updateConfirmEnabled();
+          });
+
+          actions.appendChild(restockBtn);
+          actions.appendChild(newBtn);
+          inner.appendChild(actions);
+          inner.appendChild(nameInput);
+          inner.appendChild(resolvedNote);
+
+          cell.appendChild(inner);
+          row.appendChild(cell);
         } else {
           const categoryCell = document.createElement("td");
           categoryCell.textContent = entry.category || "--";
@@ -1481,6 +1684,17 @@
     conflictInputs.forEach(function (entry) {
       pendingItems[entry.index].item = entry.input.value.trim();
       delete pendingItems[entry.index].name_conflict;
+    });
+
+    existingMatchResolutions.forEach(function (entry) {
+      // mode === "restock": pendingItems[entry.index] was already
+      // mutated (action + item name) the moment that button was
+      // clicked -- nothing left to do here but clean up the flags.
+      if (entry.mode === "new") {
+        pendingItems[entry.index].item = entry.input.value.trim();
+      }
+      delete pendingItems[entry.index].existing_item_match;
+      delete pendingItems[entry.index].existing_item;
     });
 
     importConfirmBtn.disabled = true;

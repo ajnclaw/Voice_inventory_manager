@@ -251,6 +251,7 @@ def _call_extraction(content, logger=None, hint=None):
                 item["category"] = first_category
 
     data["items"] = _flag_name_conflicts(data["items"])
+    data["items"] = _flag_existing_matches(data["items"])
 
     return data
 
@@ -319,6 +320,48 @@ def _suggest_distinct_name(items, indices, i, position):
         parts.append(f"duplicate {position + 1}")
 
     return f"{base} ({', '.join(parts)})"
+
+
+def _flag_existing_matches(items):
+    """
+    Flags any action='new_item' row whose name exactly matches an item
+    already in the live catalog. add_item's UNIQUE constraint would
+    fail this one at confirm time regardless, but the more important
+    reason to catch it here: whether this is really the SAME product
+    (a price/restock update from a new price list) or a coincidentally
+    identical name for a genuinely different one isn't something this
+    system can reliably decide on its own -- price alone isn't proof
+    (both a real update and a different product can show a different
+    price), category alone isn't proof, and there's no "which supplier/
+    import this came from" trail on existing items to compare against.
+    Rather than guess, this surfaces a snapshot of the existing item
+    alongside the new row so the owner can tell at a glance and make
+    the one call only they actually have the context for -- see
+    web/index.html's existing-item-match UI (two explicit choices:
+    update the existing item, or keep this as a new, renamed item).
+    """
+    existing_by_name = {
+        item["name"].strip().lower(): item for item in inventory_db.list_inventory()
+    }
+
+    for item in items:
+        if item.get("action") != "new_item":
+            continue
+
+        name = (item.get("item") or "").strip().lower()
+        existing = existing_by_name.get(name)
+
+        if existing:
+            item["existing_item_match"] = True
+            item["existing_item"] = {
+                "name": existing["name"],
+                "category": existing["category"],
+                "current_quantity": existing["current_quantity"],
+                "cost_price": existing["cost_price"],
+                "image_path": existing["image_path"],
+            }
+
+    return items
 
 
 def extract_from_text(text, logger=None, hint=None):
