@@ -209,6 +209,27 @@
   .import-item.result-success { border-left: 3px solid #4caf50; }
   .import-item.result-failed { border-left: 3px solid var(--error); }
 
+  .import-item.conflict {
+    border-left: 3px solid #e0a822;
+  }
+
+  .import-item.conflict .conflict-label {
+    color: #e0a822;
+    font-size: 12px;
+    margin-bottom: 6px;
+  }
+
+  .import-item.conflict input {
+    width: 100%;
+    margin-top: 6px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid #3a3f4b;
+    background: #1f232b;
+    color: var(--text);
+    font-size: 14px;
+  }
+
   #import-actions {
     display: flex;
     gap: 8px;
@@ -523,6 +544,7 @@
       <h2>What kind of bill is this?</h2>
       <button id="hint-buy-btn" class="hint-option">📥 Purchase bill (stock coming in)</button>
       <button id="hint-sale-btn" class="hint-option">📤 Sale bill (stock going out)</button>
+      <button id="hint-catalog-btn" class="hint-option">📋 Supplier price list / catalog</button>
       <button id="hint-auto-btn" class="hint-option">✨ Not sure -- let it figure it out</button>
       <button id="hint-cancel-btn" class="hint-option secondary">Cancel</button>
     </div>
@@ -612,6 +634,7 @@
   const hintOverlay = document.getElementById("hint-overlay");
   const hintBuyBtn = document.getElementById("hint-buy-btn");
   const hintSaleBtn = document.getElementById("hint-sale-btn");
+  const hintCatalogBtn = document.getElementById("hint-catalog-btn");
   const hintAutoBtn = document.getElementById("hint-auto-btn");
   const hintCancelBtn = document.getElementById("hint-cancel-btn");
   const inventoryBtn = document.getElementById("inventory-btn");
@@ -958,8 +981,28 @@
     return line;
   }
 
+  // Inputs for items the backend flagged as name_conflict (see
+  // agent/import_extractor.py's _flag_name_conflicts) -- same name,
+  // different price, almost certainly two different products the
+  // source document just described identically in text (confirmed on
+  // a real supplier PDF: two parts both called "FLYWHEEL FAN",
+  // distinguished only by a picture column extraction can't read).
+  // Each gets an editable, pre-filled suggested name instead of
+  // silently guessing or silently failing on the second one at
+  // confirm time.
+  let conflictInputs = [];
+
+  function updateConfirmEnabled() {
+    const allResolved = conflictInputs.every(function (entry) {
+      return entry.input.value.trim().length > 0;
+    });
+
+    importConfirmBtn.disabled = pendingItems.length === 0 || !allResolved;
+  }
+
   function renderImportPreview(data) {
     pendingItems = Array.isArray(data.items) ? data.items : [];
+    conflictInputs = [];
 
     importSummary.textContent = data.summary || "";
     importItemsEl.innerHTML = "";
@@ -971,19 +1014,39 @@
       importItemsEl.appendChild(empty);
       importConfirmBtn.disabled = true;
     } else {
-      importConfirmBtn.disabled = false;
-
-      pendingItems.forEach(function (entry) {
+      pendingItems.forEach(function (entry, index) {
         const row = document.createElement("div");
-        row.className = "import-item";
-        row.textContent = describeItem(entry);
+
+        if (entry.name_conflict) {
+          row.className = "import-item conflict";
+
+          const label = document.createElement("div");
+          label.className = "conflict-label";
+          label.textContent =
+            "⚠️ Same name as another item, different price (Rs " +
+            entry.unit_price + ") -- give this one a distinct name:";
+          row.appendChild(label);
+
+          const input = document.createElement("input");
+          input.type = "text";
+          input.value = entry.item + " (Rs " + entry.unit_price + ")";
+          input.addEventListener("input", updateConfirmEnabled);
+          row.appendChild(input);
+
+          conflictInputs.push({ index: index, input: input });
+        } else {
+          row.className = "import-item";
+          row.textContent = describeItem(entry);
+        }
+
         importItemsEl.appendChild(row);
       });
     }
 
     importConfirmBtn.textContent = "Confirm & Save";
-    importConfirmBtn.disabled = pendingItems.length === 0;
     importCancelBtn.textContent = "Cancel";
+    importCancelBtn.classList.remove("hidden");
+    updateConfirmEnabled();
     importOverlay.classList.remove("hidden");
   }
 
@@ -1045,6 +1108,7 @@
   hintCancelBtn.addEventListener("click", closeHintChooser);
   hintBuyBtn.addEventListener("click", function () { chooseHintAndPickFile("buy"); });
   hintSaleBtn.addEventListener("click", function () { chooseHintAndPickFile("sale"); });
+  hintCatalogBtn.addEventListener("click", function () { chooseHintAndPickFile("catalog"); });
   hintAutoBtn.addEventListener("click", function () { chooseHintAndPickFile(null); });
 
   fileInput.addEventListener("change", async function () {
@@ -1054,7 +1118,8 @@
 
     const hintLabel =
       pendingHint === "buy" ? "Marked as purchase" :
-      pendingHint === "sale" ? "Marked as sale" : "";
+      pendingHint === "sale" ? "Marked as sale" :
+      pendingHint === "catalog" ? "Marked as supplier catalog" : "";
 
     let dataUrl = null;
 
@@ -1123,6 +1188,14 @@
       closeImportOverlay();
       return;
     }
+
+    // Write each resolved conflict name back into the actual item
+    // before sending -- updateConfirmEnabled() already guarantees
+    // every one has something non-empty typed in by this point.
+    conflictInputs.forEach(function (entry) {
+      pendingItems[entry.index].item = entry.input.value.trim();
+      delete pendingItems[entry.index].name_conflict;
+    });
 
     importConfirmBtn.disabled = true;
     importCancelBtn.disabled = true;

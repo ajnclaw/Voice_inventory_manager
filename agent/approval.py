@@ -19,6 +19,7 @@ class ApprovalPolicy:
     # (empty here) for the knob that would change that.
     APPROVAL_REQUIRED_TOOLS = {
         "add_item",
+        "rename_item",
         "record_sale",
         "record_restock",
         "adjust_stock",

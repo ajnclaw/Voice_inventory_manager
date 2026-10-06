@@ -27,6 +27,10 @@ def _wrap(fn, **kwargs):
         return tool_result(success=False, error=str(exc))
 
 
+def rename_item_tool(item, new_name):
+    return _wrap(inventory_db.rename_item, old_name=item, new_name=new_name)
+
+
 def add_item_tool(
     name,
     category=None,
@@ -99,6 +103,7 @@ def sales_report_tool(since):
 
 TOOL_FUNCTIONS = {
     "add_item": add_item_tool,
+    "rename_item": rename_item_tool,
     "search_items": search_items_tool,
     "record_sale": record_sale_tool,
     "record_restock": record_restock_tool,
@@ -154,6 +159,35 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rename_item",
+            "description": (
+                "Corrects an existing item's name -- quantity, price, "
+                "and its transaction history are untouched, only the "
+                "label changes. Use this when an item's stored name "
+                "turns out to be wrong, ambiguous, or was misread "
+                "during an import (e.g. the owner says 'that part is "
+                "actually called X, not Y'). Resolve the exact current "
+                "name with search_items first if there's any doubt."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item": {
+                        "type": "string",
+                        "description": "The item's exact current stored name.",
+                    },
+                    "new_name": {
+                        "type": "string",
+                        "description": "The corrected name to rename it to.",
+                    },
+                },
+                "required": ["item", "new_name"],
             },
         },
     },

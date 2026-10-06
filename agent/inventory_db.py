@@ -91,6 +91,42 @@ def _get_item_row(conn, item_name):
     return row
 
 
+def rename_item(old_name, new_name):
+    """
+    Corrects an item's name without touching its quantity, price, or
+    transaction history -- a real recurring need, not a one-off: a
+    supplier catalog import can produce a name that only turns out to
+    be ambiguous once the owner actually knows the part (e.g. two
+    completely different parts a sloppy price list both called
+    "FLYWHEEL FAN", one of which was actually a flywheel MAGNET).
+    `items.name` is what transactions join against by id, not by name,
+    so this is purely a label change -- the ledger stays intact.
+    """
+    if not new_name or not new_name.strip():
+        raise ValueError("New name can't be empty.")
+
+    new_name = new_name.strip()
+
+    with _connect() as conn:
+        _get_item_row(conn, old_name)  # raises ItemNotFound if missing
+
+        clash = conn.execute(
+            "SELECT id FROM items WHERE name = ?", (new_name,)
+        ).fetchone()
+
+        if clash:
+            raise DuplicateItem(
+                f"An item named '{new_name}' already exists -- pick a "
+                f"different name."
+            )
+
+        conn.execute(
+            "UPDATE items SET name = ? WHERE name = ?", (new_name, old_name)
+        )
+
+    return {"old_name": old_name, "new_name": new_name}
+
+
 def add_item(
     name,
     category=None,

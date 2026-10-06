@@ -43,6 +43,26 @@ HINT_INSTRUCTIONS = {
         "item on it as action='sale', regardless of any other wording "
         "or layout in the document."
     ),
+    "catalog": (
+        "The owner has confirmed this document is a SUPPLIER PRICE "
+        "LIST / CATALOG, not a record of an actual transaction -- it "
+        "lists products a supplier can provide, not stock that has "
+        "been bought or sold yet. Treat EVERY line as action='new_item' "
+        "(even if some items might already exist in the catalog -- "
+        "duplicates get caught and reported individually when applied, "
+        "that's fine). Use the dealer/buy price column as unit_price. "
+        "For quantity, use whatever minimum-order-quantity-style column "
+        "is present (often labeled MOQ, Min Qty, Pack Size, or similar) "
+        "as a provisional starting stock count -- the owner knows this "
+        "isn't the real on-hand quantity and will correct each one "
+        "later; it's a deliberate placeholder, not a guess you're "
+        "making up. If no such column exists at all, use 0 rather than "
+        "inventing a number. A real catalog row has a price -- if "
+        "something has no price at all, it's very likely letterhead, a "
+        "section heading, or other boilerplate (see the rule on this "
+        "below), not an actual product; leave it out rather than "
+        "emitting it as an item with a null price."
+    ),
 }
 
 EXTRACT_SYSTEM_PROMPT = """
@@ -88,6 +108,14 @@ Rules:
   from the Rate column (not the Amount/line-total column, which is
   quantity times rate, not the per-unit price). Ignore the "Total"
   row itself -- it is not a separate item.
+- Documents have letterhead and boilerplate that is NOT a line item --
+  company name, address, phone/mobile numbers, dates, page headers,
+  section/category titles, "Total"/"Subtotal" rows, signatures. Skip
+  all of it. A real line item in a priced list essentially always has
+  a price next to it; text with no price, no quantity, and no column
+  values around it (e.g. a company name or a document title sitting in
+  a page footer) is boilerplate, not a product -- do not emit it as an
+  item just because it's physically near the item rows in the text.
 - If the text/image is in Hinglish or Hindi, understand it the same
   way as English -- extract the item name as written, don't translate
   it into a different language.
@@ -131,7 +159,64 @@ def _call_extraction(content, logger=None, hint=None):
     data.setdefault("items", [])
     data.setdefault("summary", "")
 
+    if hint == "catalog":
+        # Backstop, not just a prompt instruction (which alone proved
+        # unreliable in testing -- a real supplier PDF's footer/
+        # letterhead text, e.g. a company name sitting right next to
+        # the item rows, got emitted as a fake item with no price
+        # despite being explicitly told not to). A real catalog row
+        # always has a price; anything without one is near-certainly
+        # misread boilerplate, not a product -- drop it in code rather
+        # than hoping the model never slips.
+        before = len(data["items"])
+        data["items"] = [
+            item for item in data["items"] if item.get("unit_price") is not None
+        ]
+        dropped = before - len(data["items"])
+
+        if dropped:
+            data["summary"] += (
+                f" ({dropped} line(s) with no price were skipped as likely "
+                f"not real products.)"
+            )
+
+    data["items"] = _flag_name_conflicts(data["items"])
+
     return data
+
+
+def _flag_name_conflicts(items):
+    """
+    Marks items whose name collides with another item's but whose
+    price differs -- the strong real-world signal (confirmed on an
+    actual supplier catalog during testing: two genuinely different
+    parts, distinguished only by a picture the text extraction can't
+    see, both just called "170F FLYWHEEL FAN" at different prices)
+    that these are actually different products, not a duplicate
+    extraction. add_item enforces unique names, so confirming these
+    as-is would silently fail on every item after the first in the
+    group -- flagging them here lets the web UI ask the owner to tell
+    them apart before applying anything, rather than after a failed
+    write. Same name + same price is left alone (nothing to tell apart
+    -- more likely the same line read twice, harmless either way).
+    """
+    by_name = {}
+
+    for index, item in enumerate(items):
+        name = (item.get("item") or "").strip().lower()
+        by_name.setdefault(name, []).append(index)
+
+    for indices in by_name.values():
+        if len(indices) < 2:
+            continue
+
+        prices = {items[i].get("unit_price") for i in indices}
+
+        if len(prices) > 1:
+            for i in indices:
+                items[i]["name_conflict"] = True
+
+    return items
 
 
 def extract_from_text(text, logger=None, hint=None):
