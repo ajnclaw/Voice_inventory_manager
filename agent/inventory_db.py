@@ -12,6 +12,7 @@
 # that item's transactions.quantity_delta) kept in sync on every insert
 # purely as a read optimization, never as the authority.
 
+import re
 import sqlite3
 from datetime import datetime, timezone
 
@@ -248,19 +249,41 @@ def search_items(query):
     exactly the kind of thing a bulk-import extraction or a slightly
     different spoken phrasing produces constantly -- fails to match
     anything at all even though the item obviously exists.
+
+    Also matches with whitespace collapsed on both sides -- confirmed
+    real case: searching "crank case" (how an owner would naturally
+    say/type it) found nothing for items stored as "CRANKCASE" (no
+    space, how a supplier catalog happened to print it), and
+    searching "crankcase" missed items stored as "CRANK CASE". Plain
+    SQL LIKE is a literal substring match, so a whitespace difference
+    anywhere defeats it even though the words are obviously the same
+    item. The catalog is small enough that filtering in Python (one
+    SELECT * instead of a LIKE-based WHERE) costs nothing noticeable
+    and is far simpler than expressing this in SQL.
     """
-    query_lower = query.lower()
-    query_like = f"%{query_lower}%"
+    query_lower = query.lower().strip()
+    query_collapsed = re.sub(r"\s+", "", query_lower)
 
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT * FROM items WHERE lower(name) LIKE ? OR lower(category) LIKE ? "
-            "OR ? LIKE '%' || lower(name) || '%' "
-            "ORDER BY name",
-            (query_like, query_like, query_lower),
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM items ORDER BY name").fetchall()
 
-    return [_item_row_to_dict(row) for row in rows]
+    matches = []
+
+    for row in rows:
+        name_lower = row["name"].lower()
+        category_lower = (row["category"] or "").lower()
+        name_collapsed = re.sub(r"\s+", "", name_lower)
+
+        if (
+            query_lower in name_lower
+            or query_lower in category_lower
+            or name_lower in query_lower
+            or query_collapsed in name_collapsed
+            or name_collapsed in query_collapsed
+        ):
+            matches.append(row)
+
+    return [_item_row_to_dict(row) for row in matches]
 
 
 def _apply_transaction(conn, item_row, delta, txn_type, unit_price, note, created_at):

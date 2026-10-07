@@ -116,8 +116,18 @@ def _find_rows(page):
     an inconsistency in how that particular line got typeset/exported,
     not something a "pair with a neighboring span" approach can catch
     since there's no separate span to pair with. Handled as a second
-    case: a span starting with a valid Sr No followed by more text is
-    treated as both the code and the description in one.
+    pass: a span starting with a valid Sr No followed by more text is
+    treated as both the code and the description in one -- but ONLY
+    for spans not already consumed as some other row's separate
+    description partner in the first pass. Confirmed real case this
+    guard prevents: a different catalog's description column itself
+    starts with a model-number prefix ("177F ...") that happens to
+    fit the Sr No shape, and sits inside the same left-hand x-zone as
+    the real Sr No column -- without the guard, every single row's
+    own already-paired description got ALSO counted as its own
+    spurious extra "row" (Sr No "177F", description the rest of the
+    name), which can steal that row's image via the nearest-row
+    distance match in _match_row_images.
     """
     spans = []
 
@@ -129,6 +139,7 @@ def _find_rows(page):
             spans.extend(line.get("spans", []))
 
     rows = []
+    consumed_as_description = set()
 
     for span in spans:
         text = span["text"].strip()
@@ -137,25 +148,38 @@ def _find_rows(page):
         if x0 >= page.rect.width * 0.15:
             continue
 
+        if not _SR_NO_PATTERN.match(text):
+            continue
+
         y_center = (span["bbox"][1] + span["bbox"][3]) / 2
 
-        if _SR_NO_PATTERN.match(text):
-            same_row = [
-                s for s in spans
-                if s is not span
-                and abs(((s["bbox"][1] + s["bbox"][3]) / 2) - y_center) < 6
-            ]
+        same_row = [
+            s for s in spans
+            if s is not span
+            and abs(((s["bbox"][1] + s["bbox"][3]) / 2) - y_center) < 6
+        ]
 
-            if not same_row:
-                continue
+        if not same_row:
+            continue
 
-            description = max(same_row, key=lambda s: len(s["text"]))["text"]
-            rows.append((text, description, y_center))
+        description_span = max(same_row, key=lambda s: len(s["text"]))
+        rows.append((text, description_span["text"], y_center))
+        consumed_as_description.add(id(description_span))
+
+    for span in spans:
+        if id(span) in consumed_as_description:
+            continue
+
+        text = span["text"].strip()
+        x0 = span["bbox"][0]
+
+        if x0 >= page.rect.width * 0.15 or _SR_NO_PATTERN.match(text):
             continue
 
         merged = _SR_NO_PREFIX_PATTERN.match(text)
 
         if merged:
+            y_center = (span["bbox"][1] + span["bbox"][3]) / 2
             rows.append((merged.group(1), merged.group(2), y_center))
 
     return rows
@@ -176,6 +200,21 @@ def _match_row_images(page, rows):
     to its nearest row (instead of every row to its single nearest
     placement) and unioning the rects lets extract_row_images render
     the whole matched area as one flattened pixmap.
+
+    No separate "exclude letterhead/logo images above the first row"
+    step -- there used to be one, deliberately removed. It compared
+    each image's position against a cutoff fixed 40 units above the
+    TOPMOST row's text line, and confirmed real bug: on a document
+    where the very first row's own picture happens to extend more
+    than 40 units above its own text (ordinary enough -- a product
+    photo is often taller than the table's row height), that cutoff
+    discarded the row's own legitimate image as if it were letterhead.
+    The per-placement distance threshold below (`best_dist < 40`)
+    already does this job correctly on its own -- genuine letterhead
+    sits far above every real row's text, nowhere close to the
+    40-unit threshold, so it already never gets assigned to any row
+    without needing a second, cruder filter that can misfire on a
+    row's own picture.
     """
     placements = []
 
@@ -185,11 +224,6 @@ def _match_row_images(page, rows):
 
     if not placements or not rows:
         return {}
-
-    # Images confined above the first row are letterhead/logos, not
-    # product pictures -- exclude them using the topmost row as cutoff.
-    header_cutoff = min(y for _, _, y in rows) - 40
-    placements = [r for r in placements if r.y0 >= header_cutoff]
 
     row_rects = {}
 
