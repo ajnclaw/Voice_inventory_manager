@@ -1420,19 +1420,19 @@
         "<tr><td colspan=\"6\">Nothing usable was found in that file.</td></tr>";
       importConfirmBtn.disabled = true;
     } else {
-      // Sorted by category for display (same inventory-table layout
-      // the owner asked for), but every row keeps its ORIGINAL
-      // pendingItems index in data-item-index -- apply_import_items
-      // runs and returns results in that original order, not display
-      // order, so result-matching and the conflict-input write-back
-      // both key off this rather than DOM position.
+      // Deliberately NOT sorted -- kept in the exact order extraction
+      // produced, which follows the source document's own order.
+      // Confirmed real complaint: a category sort here (unlike the
+      // full inventory view, where it's genuinely useful) actively
+      // hurts the owner's actual workflow -- QC'ing a 90-line catalog
+      // import means checking each row against the physical PDF,
+      // which only works if the review list reads top-to-bottom the
+      // same way the PDF does. Every row still keeps its own
+      // pendingItems index in data-item-index (not just a DOM
+      // position) since apply_import_items runs and returns results
+      // in that same original order -- result-matching and the
+      // conflict-input write-back both key off this.
       const order = pendingItems.map(function (_entry, index) { return index; });
-      order.sort(function (a, b) {
-        const catA = (pendingItems[a].category || "").toLowerCase();
-        const catB = (pendingItems[b].category || "").toLowerCase();
-        if (catA !== catB) return catA < catB ? -1 : 1;
-        return (pendingItems[a].item || "").localeCompare(pendingItems[b].item || "");
-      });
 
       order.forEach(function (index) {
         const entry = pendingItems[index];
