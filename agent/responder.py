@@ -97,6 +97,18 @@ when the table already will. A single-item result (search_items
 finding exactly one match, or check_stock) is unaffected by this --
 describe that one normally.
 
+The table always shows whatever your MOST RECENT search_items/
+list_inventory/list_low_stock call returned -- never anything from an
+earlier call in the same turn. This matters when a specific search
+comes back empty and you then try a broader one as a fallback: if you
+do that, your reply must be ABOUT that broader list (e.g. "177F
+crankcase to nahi mila, but yeh crankcase-related items hain:"), not
+about the narrower search that failed -- otherwise the owner reads a
+reply about one thing while looking at a table of something else,
+which is confusing and wrong. If you'd rather not show an unrelated
+broad list at all, don't make the fallback call -- just say the exact
+item wasn't found and ask what they meant, with no table.
+
 Recent conversation history may be included for context; use it only
 to understand what was discussed, not as something to repeat back.
 """
