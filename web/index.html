@@ -270,6 +270,33 @@
     background: #1f232b;
   }
 
+  /* Side-by-side layout for a grouped same-name conflict -- every
+     item sharing the name sits in its own column so the owner can
+     actually compare them instead of hunting for the other one
+     elsewhere in the list. */
+  .conflict-group-items {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+  }
+
+  .conflict-group-item {
+    flex: 1;
+    min-width: 150px;
+    background: #1f232b;
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+
+  .conflict-group-item-meta {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .conflict-group-item-meta .field {
+    padding: 1px 0;
+  }
+
   /* An imported row whose name exactly matches an item already in the
      catalog -- see _flag_existing_matches. Styled distinctly from a
      same-batch name_conflict (blue, not amber) since it's a different
@@ -1647,6 +1674,17 @@
   // resolve) or "new" (needs a typed, distinct name via `input`).
   let existingMatchResolutions = [];
 
+  // Maps a pendingItems index to the row it ended up in (several
+  // indices can point at the same row -- a grouped name-conflict
+  // block covers more than one), and separately to the specific
+  // element a failure note for that exact item should be appended to
+  // (the row itself for a normal/existing-match row, but that
+  // member's own column within a conflict-group row, so a failure on
+  // one member doesn't get misattributed to another). Both rebuilt
+  // on every renderImportPreview call.
+  let resultRowByIndex = {};
+  let resultTargetByIndex = {};
+
   function updateConfirmEnabled() {
     const conflictsResolved = conflictInputs.every(function (entry) {
       return entry.input.value.trim().length > 0;
@@ -1670,6 +1708,8 @@
     conflictInputs = [];
     existingMatchResolutions = [];
     activeImportEditCleanup = null;
+    resultRowByIndex = {};
+    resultTargetByIndex = {};
 
     // The count is stated twice over -- once as the actual length of
     // this array (always correct by definition) and once inside the
@@ -1702,13 +1742,41 @@
       // conflict-input write-back both key off this.
       const order = pendingItems.map(function (_entry, index) { return index; });
 
+      // Same-batch name conflicts are a different story though:
+      // confirmed real complaint -- each conflicting row was shown on
+      // its own, with no way to actually see the OTHER item it
+      // collides with without hunting for it elsewhere in a 90-row
+      // list. Grouped here into one combined block per shared name
+      // (all members side by side, same comparison idea as the
+      // existing-item-match card below), positioned at the first
+      // member's original spot -- document order is otherwise
+      // untouched, this is the one deliberate exception since these
+      // rows fundamentally need joint review anyway.
+      const conflictGroups = {};
+
+      pendingItems.forEach(function (entry, index) {
+        if (!entry.name_conflict) return;
+        const key = (entry.item || "").trim().toLowerCase();
+        (conflictGroups[key] = conflictGroups[key] || []).push(index);
+      });
+
+      const renderedConflictGroups = new Set();
+
       order.forEach(function (index) {
         const entry = pendingItems[index];
-        const row = document.createElement("tr");
-        row.dataset.itemIndex = String(index);
 
         if (entry.name_conflict) {
+          const key = (entry.item || "").trim().toLowerCase();
+
+          if (renderedConflictGroups.has(key)) return; // part of an already-rendered group
+          renderedConflictGroups.add(key);
+
+          const memberIndices = conflictGroups[key];
+
+          const row = document.createElement("tr");
           row.className = "conflict";
+          row.dataset.itemIndices = memberIndices.join(",");
+          memberIndices.forEach(function (i) { resultRowByIndex[i] = row; });
 
           const cell = document.createElement("td");
           cell.colSpan = 6;
@@ -1716,33 +1784,67 @@
           const inner = document.createElement("div");
           inner.className = "conflict-row-body";
 
-          // Each conflicting item was matched to its own picture from
-          // the source PDF during extraction (see pdf_images.py) --
-          // showing it here is the actual distinguishing information,
-          // better than a bare line number: the owner can look at it
-          // and immediately tell which real part this row is.
-          if (entry.image_path) {
-            const imgUrl = "/product_images/" + entry.image_path.split("/").pop();
-            appendAuthenticatedImage(inner, imgUrl, "conflict-image");
-          }
-
           const label = document.createElement("div");
           label.className = "conflict-label";
           label.textContent =
-            "⚠️ Same name as another item below -- give this one a distinct name:";
+            "⚠️ " + memberIndices.length + ' items share the name "' +
+            entry.item + '" -- give each a distinct name:';
           inner.appendChild(label);
 
-          const input = document.createElement("input");
-          input.type = "text";
-          input.value = entry.suggested_name || entry.item;
-          input.addEventListener("input", updateConfirmEnabled);
-          inner.appendChild(input);
+          const itemsWrap = document.createElement("div");
+          itemsWrap.className = "conflict-group-items";
 
+          memberIndices.forEach(function (memberIndex) {
+            const member = pendingItems[memberIndex];
+            const col = document.createElement("div");
+            col.className = "conflict-group-item";
+
+            // Each conflicting item was matched to its own picture
+            // from the source PDF during extraction (see
+            // pdf_images.py) -- showing it here is the actual
+            // distinguishing information, better than a bare line
+            // number: the owner can look at it and immediately tell
+            // which real part this one is.
+            if (member.image_path) {
+              const imgUrl = "/product_images/" + member.image_path.split("/").pop();
+              appendAuthenticatedImage(col, imgUrl, "conflict-image");
+            }
+
+            const meta = document.createElement("div");
+            meta.className = "conflict-group-item-meta";
+            meta.innerHTML =
+              '<div class="field">' + (member.category || "--") + '</div>' +
+              '<div class="field">Qty: ' + formatImportQty(member) + '</div>' +
+              '<div class="field">Price: ' +
+              (member.unit_price != null ? formatMoney(member.unit_price) : "--") +
+              '</div>';
+            col.appendChild(meta);
+
+            const input = document.createElement("input");
+            input.type = "text";
+            input.value = member.suggested_name || member.item;
+            input.addEventListener("input", updateConfirmEnabled);
+            col.appendChild(input);
+
+            resultTargetByIndex[memberIndex] = col;
+            itemsWrap.appendChild(col);
+
+            conflictInputs.push({ index: memberIndex, input: input });
+          });
+
+          inner.appendChild(itemsWrap);
           cell.appendChild(inner);
           row.appendChild(cell);
+          importTableBody.appendChild(row);
+          return;
+        }
 
-          conflictInputs.push({ index: index, input: input });
-        } else if (entry.existing_item_match) {
+        const row = document.createElement("tr");
+        row.dataset.itemIndex = String(index);
+        resultRowByIndex[index] = row;
+        resultTargetByIndex[index] = row;
+
+        if (entry.existing_item_match) {
           row.className = "existing-match";
 
           const cell = document.createElement("td");
@@ -1898,9 +2000,7 @@
 
   function renderImportResults(results) {
     results.forEach(function (result, index) {
-      const row = importTableBody.querySelector(
-        'tr[data-item-index="' + index + '"]'
-      );
+      const row = resultRowByIndex[index];
 
       if (!row) return;
 
@@ -1910,10 +2010,12 @@
         const note = document.createElement("div");
         note.className = "result-note";
         note.textContent = "FAILED: " + result.error;
-        // Last cell in a normal row is Action; a conflict row's only
-        // cell is the colspan-6 one -- either way, the last cell is
-        // the right place to attach this.
-        row.lastElementChild.appendChild(note);
+        // Normal/existing-match row -> the row itself (its last
+        // cell). Conflict-group row -> that specific member's own
+        // column, so a failure on one member doesn't read as if it
+        // were about all of them.
+        const target = resultTargetByIndex[index] || row;
+        target.appendChild(note);
       }
     });
 
