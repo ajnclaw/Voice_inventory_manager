@@ -250,6 +250,10 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_inventory_tool("adjust_stock")
         elif self.path == "/inventory/set-price":
             self._handle_inventory_tool("set_price")
+        elif self.path == "/item/confirm-add":
+            self._handle_item_confirm_add()
+        elif self.path == "/item/reject-add":
+            self._handle_item_reject_add()
         else:
             self._send_json({"error": "not found"}, status=404)
 
@@ -278,12 +282,14 @@ class Handler(BaseHTTPRequestHandler):
 
         image_path = None
         items = None
+        pending_new_item = None
 
         try:
             result = responder.respond(user_input, history=history)
             reply = result["reply"]
             image_path = result.get("image_path")
             items = result.get("items")
+            pending_new_item = result.get("pending_new_item")
             status = "completed"
         except Exception as exc:
             reply = f"Something went wrong: {exc}"
@@ -323,6 +329,7 @@ class Handler(BaseHTTPRequestHandler):
                 if image_path
                 else None,
                 "items": _serialize_item_list(items),
+                "pending_new_item": pending_new_item,
             }
         )
 
@@ -510,6 +517,55 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send_json({"error": result.get("error") or "failed"}, status=400)
 
+    def _handle_item_confirm_add(self):
+        """
+        Actually writes a new item that responder.py held back pending
+        owner review (see its add_item interception) -- the owner
+        tapped Accept on the proposal card in the chat UI. Takes
+        whatever arguments add_item itself accepts (name required,
+        everything else optional), bypassing the LLM entirely since
+        there's nothing left to resolve -- the owner already reviewed
+        the exact values.
+        """
+        try:
+            body = self._read_json_body()
+        except json.JSONDecodeError:
+            self._send_json({"error": "invalid JSON body"}, status=400)
+            return
+
+        if not (body.get("name") or "").strip():
+            self._send_json({"error": "missing 'name'"}, status=400)
+            return
+
+        run_logger = RunLogger("[new item confirmed by owner]")
+        responder.tool_manager.set_logger(run_logger)
+
+        result = responder.tool_manager.execute("add_item", body)
+
+        run_logger.finalize("completed" if result.get("success") else "failed")
+        monitoring.record_request_outcome(
+            "item_confirm_add", "completed" if result.get("success") else "failed"
+        )
+
+        if result.get("success"):
+            self._send_json({"output": result.get("output")})
+        else:
+            self._send_json({"error": result.get("error") or "failed"}, status=400)
+
+    def _handle_item_reject_add(self):
+        """
+        Fire-and-forget signal that the owner rejected a proposed new
+        item -- nothing to undo (it was never written), purely a
+        quality record, same reasoning as /import/cancel.
+        """
+        try:
+            body = self._read_json_body()
+        except json.JSONDecodeError:
+            body = {}
+
+        monitoring.record_request_outcome("item_reject_add", "rejected")
+        self._send_json({"status": "noted"})
+
     def _handle_import_cancel(self):
         """
         Fire-and-forget signal from the web UI: the owner reviewed an
@@ -565,6 +621,8 @@ def main():
     print("GET /inventory -> full catalog + summary totals (table view)")
     print('POST /inventory/adjust-stock {"item", "new_quantity", "reason"} -> direct stock edit')
     print('POST /inventory/set-price {"item", "cost_price"?, "sale_price"?} -> direct price edit')
+    print('POST /item/confirm-add {...add_item args} -> writes a new item the owner accepted')
+    print('POST /item/reject-add -> logs a rejected new-item proposal, writes nothing')
     print("GET /usage -> cumulative LLM calls/tokens/estimated cost, all time")
     print("GET /transcript -> saved conversation log (every /chat and /upload turn)")
     print("GET /stats -> backend-only: auth failures, failure rate, import reject rate")

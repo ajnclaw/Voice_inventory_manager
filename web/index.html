@@ -666,6 +666,55 @@
     white-space: nowrap;
   }
 
+  /* Proposed-new-item card -- add_item never writes anything until
+     the owner explicitly accepts it here (see responder.py's
+     interception of the add_item tool call). */
+  .pending-item-card {
+    margin-top: 8px;
+    background: #1f232b;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+
+  .pending-item-title {
+    color: var(--accent);
+    font-size: 11px;
+    text-transform: uppercase;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  .pending-item-fields .field {
+    padding: 1px 0;
+  }
+
+  .pending-item-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .pending-item-actions button {
+    flex: 1;
+    padding: 9px;
+    border-radius: 8px;
+    border: none;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .pending-item-accept-btn { background: var(--accent); color: white; }
+  .pending-item-reject-btn { background: #2a2e37; color: var(--text); }
+
+  .pending-item-status {
+    font-size: 12px;
+    margin-top: 6px;
+  }
+
+  .pending-item-status-success { color: #4caf50; }
+  .pending-item-status-error { color: var(--error); }
+
   .msg-file-chip {
     display: flex;
     align-items: center;
@@ -1129,6 +1178,123 @@
     return el;
   }
 
+  // Renders the Accept/Reject card for a proposed new item -- see
+  // responder.py's add_item interception. Nothing is written to
+  // inventory.db until the owner taps Accept here; Reject is purely
+  // a local dismiss (plus a fire-and-forget quality log), there is
+  // nothing to undo since nothing was ever saved.
+  function renderPendingNewItemCard(el, pendingItem) {
+    const body = el.querySelector(".msg-body");
+    if (!body || !pendingItem) return;
+
+    const card = document.createElement("div");
+    card.className = "pending-item-card";
+
+    const title = document.createElement("div");
+    title.className = "pending-item-title";
+    title.textContent = "New item proposed";
+    card.appendChild(title);
+
+    const fields = document.createElement("div");
+    fields.className = "pending-item-fields";
+
+    const nameField = document.createElement("div");
+    nameField.className = "field";
+    const nameStrong = document.createElement("strong");
+    nameStrong.textContent = pendingItem.name || "";
+    nameField.appendChild(nameStrong);
+    fields.appendChild(nameField);
+
+    if (pendingItem.category) {
+      const f = document.createElement("div");
+      f.className = "field";
+      f.textContent = "Category: " + pendingItem.category;
+      fields.appendChild(f);
+    }
+
+    const qtyField = document.createElement("div");
+    qtyField.className = "field";
+    qtyField.textContent =
+      "Starting qty: " + (pendingItem.initial_quantity != null ? pendingItem.initial_quantity : 0);
+    fields.appendChild(qtyField);
+
+    if (pendingItem.cost_price != null) {
+      const f = document.createElement("div");
+      f.className = "field";
+      f.textContent = "Cost price: " + formatMoney(pendingItem.cost_price);
+      fields.appendChild(f);
+    }
+
+    if (pendingItem.sale_price != null) {
+      const f = document.createElement("div");
+      f.className = "field";
+      f.textContent = "Sale price: " + formatMoney(pendingItem.sale_price);
+      fields.appendChild(f);
+    }
+
+    card.appendChild(fields);
+
+    const actions = document.createElement("div");
+    actions.className = "pending-item-actions";
+
+    const statusEl = document.createElement("div");
+    statusEl.className = "pending-item-status";
+
+    const acceptBtn = document.createElement("button");
+    acceptBtn.className = "pending-item-accept-btn";
+    acceptBtn.textContent = "Accept";
+    acceptBtn.addEventListener("click", async function () {
+      acceptBtn.disabled = true;
+      rejectBtn.disabled = true;
+
+      try {
+        await callApi("/item/confirm-add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(pendingItem),
+        });
+        actions.classList.add("hidden");
+        statusEl.textContent = "✓ Added to inventory.";
+        statusEl.classList.add("pending-item-status-success");
+      } catch (err) {
+        if (err.message !== "unauthorized") {
+          statusEl.textContent = "Couldn't save: " + err.message;
+          statusEl.classList.add("pending-item-status-error");
+          acceptBtn.disabled = false;
+          rejectBtn.disabled = false;
+        }
+      }
+    });
+
+    const rejectBtn = document.createElement("button");
+    rejectBtn.className = "pending-item-reject-btn";
+    rejectBtn.textContent = "Reject";
+    rejectBtn.addEventListener("click", function () {
+      // Fire-and-forget, same reasoning as /import/cancel's beacon --
+      // a raw fetch, not callApi(), so a 401 here never bounces the
+      // owner to the re-auth screen as a side effect of dismissing a
+      // card.
+      fetch("/item/reject-add", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer " + getToken(),
+        },
+        body: JSON.stringify({ name: pendingItem.name }),
+      }).catch(function () {});
+
+      actions.classList.add("hidden");
+      statusEl.textContent = "Rejected -- not added.";
+    });
+
+    actions.appendChild(acceptBtn);
+    actions.appendChild(rejectBtn);
+    card.appendChild(actions);
+    card.appendChild(statusEl);
+
+    body.appendChild(card);
+  }
+
   // ---- Text-to-speech: reads assistant replies aloud automatically.
   // Fully client-side (window.speechSynthesis), no server round-trip.
   // Muted state persists per-device via localStorage.
@@ -1262,6 +1428,10 @@
         renderChatItemsTable(pending, data.items);
       } else if (data.image_url) {
         appendImageToMessage(pending, data.image_url);
+      }
+
+      if (data.pending_new_item) {
+        renderPendingNewItemCard(pending, data.pending_new_item);
       }
     } catch (err) {
       pending.remove();

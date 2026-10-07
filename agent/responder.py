@@ -58,6 +58,17 @@ clearly state back exactly what was recorded (item, quantity, and the
 new stock level) so a misunderstanding is immediately obvious and
 correctable.
 
+add_item specifically works differently from the other write tools:
+call it exactly when it's genuinely warranted (same judgment as
+always), but nothing actually gets written to the catalog yet when
+you do -- the app always shows the owner the proposed item and makes
+them explicitly accept or reject it before it's real. That review
+step happens automatically outside this conversation, so just call
+the tool normally; don't ask the owner to confirm in your own reply
+first (the app's own confirmation step already covers that -- asking
+twice is redundant) and don't claim the item has been added, since at
+the point you call it, it hasn't been yet.
+
 adjust_stock is specifically for correcting a count that doesn't match
 reality (damaged goods, a miscount, stock taken for personal use) -- it
 always needs a reason, and it is NOT for an ordinary sale or restock;
@@ -264,11 +275,51 @@ class Responder:
                     ),
                     "image_path": last_item_image,
                     "items": last_item_list,
+                    "pending_new_item": None,
                 }
 
             for tool_call in tool_calls:
                 tool_name = tool_call.function.name
                 arguments = tool_call.function.arguments
+
+                if tool_name == "add_item":
+                    # A brand-new product needs the owner's explicit
+                    # accept/reject before anything is written --
+                    # unlike sale/restock/adjustment (routine, cheap
+                    # to fix with another entry), a wrong new item is
+                    # a garbage/duplicate catalog row that isn't
+                    # trivially undone. Confirmed real incident: the
+                    # model once added a bogus item purely from
+                    # ambiguous conversational context, with no
+                    # review step at all. The reply here is built in
+                    # code, not left to the model to phrase a
+                    # "pending" state correctly -- same reasoning as
+                    # every other backstop in this file: don't trust
+                    # prompt-only behavior for something that writes
+                    # real data.
+                    name = arguments.get("name") or "this item"
+                    details = [f"'{name}'"]
+
+                    if arguments.get("category"):
+                        details.append(f"category '{arguments['category']}'")
+
+                    details.append(
+                        f"starting qty {arguments.get('initial_quantity', 0)}"
+                    )
+
+                    if arguments.get("cost_price") is not None:
+                        details.append(f"cost price Rs {arguments['cost_price']}")
+
+                    return {
+                        "reply": (
+                            "Naya item add karne se pehle ek baar confirm kar lo -- "
+                            + ", ".join(details)
+                            + ". Neeche accept ya reject kar sakte ho."
+                        ),
+                        "image_path": last_item_image,
+                        "items": last_item_list,
+                        "pending_new_item": arguments,
+                    }
 
                 result = self.tool_manager.execute(tool_name, arguments)
 
@@ -304,4 +355,5 @@ class Responder:
             ),
             "image_path": last_item_image,
             "items": last_item_list,
+            "pending_new_item": None,
         }
