@@ -1368,6 +1368,94 @@
     return String(entry.quantity);
   }
 
+  function renderImportItemCell(cell, entry) {
+    cell.innerHTML = "";
+    cell.textContent = entry.item || "";
+
+    if (entry.action === "adjustment" && entry.reason) {
+      const note = document.createElement("div");
+      note.className = "import-item-note";
+      note.textContent = entry.reason;
+      cell.appendChild(note);
+    }
+  }
+
+  // Only one import-row name editor open at a time, same idea as the
+  // inventory table's activeEditCleanup -- kept as a separate
+  // variable rather than sharing that one, since these are two
+  // unrelated screens/flows.
+  let activeImportEditCleanup = null;
+
+  // Lets the owner fix an extraction slip right in the review table
+  // instead of confirming a wrong name and fixing it later via chat.
+  // Confirmed real need: the model occasionally drops a leading digit
+  // reading a row whose Sr No and product-model prefix both start
+  // with the same number (e.g. "177F CRANKSHAFT" -> "77F CRANKSHAFT")
+  // -- genuinely hard to catch in code without guessing, so the
+  // owner's own QC pass (which already has to check every row against
+  // the source PDF) is the right place to correct it. Purely local
+  // state -- nothing is saved to inventory.db until Confirm, same as
+  // every other field here.
+  function openImportNameEditor(cell, entry) {
+    if (activeImportEditCleanup) activeImportEditCleanup();
+
+    cell.classList.add("editing");
+    cell.innerHTML = "";
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = entry.item || "";
+    input.className = "inline-edit-input";
+
+    function cleanup() {
+      cell.classList.remove("editing");
+      renderImportItemCell(cell, entry);
+      activeImportEditCleanup = null;
+    }
+
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "inline-edit-save";
+    saveBtn.textContent = "✓";
+    saveBtn.addEventListener("click", function () {
+      const value = input.value.trim();
+      if (!value) return;
+      entry.item = value;
+      cleanup();
+    });
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "inline-edit-cancel";
+    cancelBtn.textContent = "✕";
+    cancelBtn.addEventListener("click", cleanup);
+
+    const btnRow = document.createElement("div");
+    btnRow.className = "inline-edit-buttons";
+    btnRow.appendChild(saveBtn);
+    btnRow.appendChild(cancelBtn);
+
+    const wrap = document.createElement("div");
+    wrap.className = "inline-edit";
+    // Belt-and-suspenders against the cell's own click listener: a
+    // classList-based "already editing" guard alone isn't reliable
+    // here, because this save handler is synchronous -- cleanup()
+    // runs (removing the "editing" class) BEFORE this same click
+    // finishes bubbling up to the cell, so by the time the cell's
+    // guard checks classList it's already false, and the editor
+    // reopens immediately after saving. Confirmed real bug.
+    // stopPropagation on the whole editor container is the actual
+    // fix: nothing inside it ever reaches the cell's listener at all,
+    // regardless of sync/async timing.
+    wrap.addEventListener("click", function (e) {
+      e.stopPropagation();
+    });
+    wrap.appendChild(input);
+    wrap.appendChild(btnRow);
+
+    cell.appendChild(wrap);
+    activeImportEditCleanup = cleanup;
+    input.focus();
+  }
+
   // Inputs for items the backend flagged as name_conflict (see
   // agent/import_extractor.py's _flag_name_conflicts) -- same name,
   // different price, almost certainly two different products the
@@ -1411,8 +1499,18 @@
     pendingItems = Array.isArray(data.items) ? data.items : [];
     conflictInputs = [];
     existingMatchResolutions = [];
+    activeImportEditCleanup = null;
 
-    importSummary.textContent = data.summary || "";
+    // The count is stated twice over -- once as the actual length of
+    // this array (always correct by definition) and once inside the
+    // model's own free-text summary sentence (not always correct:
+    // confirmed real case, a PDF with a gap in its own Sr No
+    // numbering -- 12, 14, 15, ... -- led the model to state the
+    // document's highest printed number as the item count instead of
+    // actually counting the rows). Never trust the model's arithmetic
+    // when the real number is sitting right there.
+    importSummary.textContent =
+      pendingItems.length + " item(s) found. " + (data.summary || "");
     importTableBody.innerHTML = "";
 
     if (pendingItems.length === 0) {
@@ -1580,13 +1678,13 @@
           row.appendChild(categoryCell);
 
           const itemCell = document.createElement("td");
-          itemCell.textContent = entry.item || "";
-          if (entry.action === "adjustment" && entry.reason) {
-            const note = document.createElement("div");
-            note.className = "import-item-note";
-            note.textContent = entry.reason;
-            itemCell.appendChild(note);
-          }
+          itemCell.className = "editable-cell";
+          itemCell.title = "Tap to correct this name";
+          renderImportItemCell(itemCell, entry);
+          itemCell.addEventListener("click", function () {
+            if (itemCell.classList.contains("editing")) return;
+            openImportNameEditor(itemCell, entry);
+          });
           row.appendChild(itemCell);
 
           const imageCell = document.createElement("td");
@@ -2069,6 +2167,13 @@
 
     const wrap = document.createElement("div");
     wrap.className = "inline-edit";
+    // See the comment in openImportNameEditor -- stopPropagation here
+    // is the robust fix, not just the classList guard on the cell's
+    // own listener (which only works by accident of this save
+    // handler being async).
+    wrap.addEventListener("click", function (e) {
+      e.stopPropagation();
+    });
 
     const qtyInput = document.createElement("input");
     qtyInput.type = "number";
@@ -2124,6 +2229,9 @@
 
     const wrap = document.createElement("div");
     wrap.className = "inline-edit";
+    wrap.addEventListener("click", function (e) {
+      e.stopPropagation();
+    });
 
     const priceInput = document.createElement("input");
     priceInput.type = "number";
