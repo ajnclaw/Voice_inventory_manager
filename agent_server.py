@@ -59,7 +59,10 @@ from agent.responder import Responder
 from agent.transcript_log import append_turn, read_all as read_transcript
 from agent import usage_tracker
 
-HOST = "0.0.0.0"
+# Defaults to all interfaces for local/adb-tunnel use; the EC2 deployment
+# sets AGENT_HOST=127.0.0.1 so only the reverse proxy (Caddy) on the same
+# machine can reach it, never the open internet directly.
+HOST = os.environ.get("AGENT_HOST", "0.0.0.0")
 PORT = 8766
 
 KEEP_RECENT_TURNS = 5
@@ -128,6 +131,16 @@ def _serialize_item_list(items):
 
 
 class Handler(BaseHTTPRequestHandler):
+    # Idle-socket timeout, in seconds. This server is single-threaded on
+    # purpose (see the module docstring), which means ONE connection that
+    # opens and then never sends a request -- browsers do this routinely
+    # (speculative preconnects) -- would block the accept loop forever and
+    # make every other client hang with it (the recurring "page stuck at
+    # 10%" symptom). A socket timeout makes that stalled read raise and
+    # drop the connection instead. It only limits time spent waiting on the
+    # network, not LLM calls: those run between socket operations.
+    timeout = 15
+
     def _send_json(self, payload, status=200):
         body = json.dumps(payload).encode("utf-8")
 
