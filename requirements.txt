@@ -4,3 +4,8 @@
 # same hosted LLM (gpt-4o-mini is multimodal) already used for chat,
 # not a separate OCR engine.
 PyMuPDF>=1.24.0
+
+# "Sign in with Google" (agent/google_auth.py): verifies Google's ID token.
+# `requests` is the HTTP transport google-auth uses to fetch Google's keys.
+google-auth>=2.30.0
+requests>=2.31.0

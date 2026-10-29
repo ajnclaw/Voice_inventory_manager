@@ -39,6 +39,26 @@ _load_dotenv(PROJECT_ROOT / ".env")
 # mean "wide open on the internet." See agent_server.py's check.
 AGENT_API_TOKEN = os.environ.get("AGENT_API_TOKEN", "")
 
+# "Sign in with Google" for the web UI, layered on top of the token above
+# (which keeps working for scripts, curl and local dev). All three must be
+# set for it to turn on -- an allowlist is mandatory, never "any Google
+# account", since a public sign-in button with no allowlist would let
+# anyone on the internet in. Fails closed: a missing piece disables Google
+# sign-in rather than weakening it.
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+ALLOWED_GOOGLE_EMAILS = {
+    email.strip().lower()
+    for email in os.environ.get("ALLOWED_GOOGLE_EMAILS", "").split(",")
+    if email.strip()
+}
+# Signs the session cookie. Generate with:
+#   python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
+SESSION_TTL_SECONDS = int(os.environ.get("SESSION_TTL_DAYS", "30")) * 24 * 3600
+GOOGLE_AUTH_ENABLED = bool(
+    GOOGLE_CLIENT_ID and ALLOWED_GOOGLE_EMAILS and SESSION_SECRET
+)
+
 # ---------------------------------------------------------------------------
 # LLM provider selection -- same provider-agnostic setup as ~/ai-agent's
 # llm_client.py: every provider here exposes an OpenAI-compatible

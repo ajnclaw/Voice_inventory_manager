@@ -837,6 +837,23 @@
     min-height: 16px;
   }
 
+  #google-section, #token-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+  }
+
+  #setup .link-btn {
+    background: none;
+    color: var(--text-dim);
+    font-size: 13px;
+    font-weight: 400;
+    text-decoration: underline;
+    padding: 4px;
+  }
+
   .hidden { display: none !important; }
 </style>
 </head>
@@ -849,15 +866,25 @@
       <button id="inventory-btn" title="View full inventory table">📊</button>
       <button id="mute-btn" title="Toggle spoken replies">🔊</button>
       <button id="clear-btn">Clear chat</button>
+      <button id="signout-btn" class="hidden" title="Sign out of this device">Sign out</button>
     </div>
   </header>
 
-  <!-- Shown once, until a working token is stored in this browser -->
+  <!-- Shown until signed in: Google sign-in when the server has it
+       configured, with the access token as a fallback -->
   <div id="setup">
-    <p>Enter the access token for this shop's inventory server. You only
-       need to do this once on this device.</p>
-    <input id="token-input" type="password" placeholder="Access token" autocomplete="off">
-    <button id="token-save">Save and connect</button>
+    <div id="google-section" class="hidden">
+      <p>Sign in with the Google account that's allowed to use this shop's
+         inventory.</p>
+      <div id="google-button"></div>
+      <button id="show-token-btn" class="link-btn">Use an access token instead</button>
+    </div>
+    <div id="token-section" class="hidden">
+      <p>Enter the access token for this shop's inventory server. You only
+         need to do this once on this device.</p>
+      <input id="token-input" type="password" placeholder="Access token" autocomplete="off">
+      <button id="token-save">Save and connect</button>
+    </div>
     <div id="setup-error"></div>
   </div>
 
@@ -982,6 +1009,11 @@
   const tokenInput = document.getElementById("token-input");
   const tokenSave = document.getElementById("token-save");
   const setupError = document.getElementById("setup-error");
+  const googleSection = document.getElementById("google-section");
+  const googleButton = document.getElementById("google-button");
+  const tokenSection = document.getElementById("token-section");
+  const showTokenBtn = document.getElementById("show-token-btn");
+  const signoutBtn = document.getElementById("signout-btn");
   const attachBtn = document.getElementById("attach-btn");
   const fileInput = document.getElementById("file-input");
   const importOverlay = document.getElementById("import-overlay");
@@ -1012,16 +1044,110 @@
     localStorage.removeItem(TOKEN_KEY);
   }
 
+  // Headers for every authenticated request. The session cookie rides
+  // along automatically; X-Requested-With is what the server requires on
+  // cookie-authenticated writes (cross-site forgery protection), and the
+  // bearer token is only sent when one was typed in as the fallback.
+  function authHeaders(extra) {
+    const headers = { "X-Requested-With": "shop-ui", ...extra };
+    const token = getToken();
+    if (token) headers.Authorization = "Bearer " + token;
+    return headers;
+  }
+
   function showSetup(message) {
     setupEl.classList.remove("hidden");
     chatEl.classList.add("hidden");
+    signoutBtn.classList.add("hidden");
     setupError.textContent = message || "";
+    initSignIn();
   }
 
   function showChat() {
     setupEl.classList.add("hidden");
     chatEl.classList.remove("hidden");
+    signoutBtn.classList.remove("hidden");
     textInput.focus();
+  }
+
+  // Shows Google's button when the server has Google sign-in configured,
+  // otherwise the plain access-token form.
+  let googleStarted = false;
+
+  async function initSignIn() {
+    let clientId = null;
+
+    try {
+      const response = await fetch("/auth/config");
+      clientId = (await response.json()).google_client_id;
+    } catch (e) {
+      // Server unreachable -- fall through to the token form.
+    }
+
+    if (!clientId) {
+      googleSection.classList.add("hidden");
+      tokenSection.classList.remove("hidden");
+      return;
+    }
+
+    googleSection.classList.remove("hidden");
+    tokenSection.classList.add("hidden");
+
+    if (googleStarted) return;
+    googleStarted = true;
+
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.onload = function () {
+      google.accounts.id.initialize({
+        client_id: clientId,
+        callback: onGoogleCredential,
+      });
+      google.accounts.id.renderButton(googleButton, {
+        theme: "filled_blue",
+        size: "large",
+        text: "signin_with",
+      });
+    };
+    script.onerror = function () {
+      googleStarted = false;
+      setupError.textContent = "Couldn't load Google sign-in. Check your connection.";
+    };
+    document.head.appendChild(script);
+  }
+
+  async function onGoogleCredential(googleResponse) {
+    setupError.textContent = "";
+
+    try {
+      const response = await fetch("/auth/google", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credential: googleResponse.credential }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        setupError.textContent = data.error || "Sign-in failed.";
+        return;
+      }
+
+      showChat();
+    } catch (e) {
+      setupError.textContent = "Sign-in failed. Try again.";
+    }
+  }
+
+  async function signOut() {
+    try {
+      await fetch("/auth/logout", { method: "POST", headers: authHeaders() });
+    } catch (e) {
+      // Still clear this device's token and reload below.
+    }
+
+    clearToken();
+    location.reload();
   }
 
   function formatTime(date) {
@@ -1063,9 +1189,7 @@
   // endpoint here -- or just fail) and turns it into a blob URL the
   // <img> tag can actually use.
   async function loadAuthenticatedImage(url) {
-    const response = await fetch(url, {
-      headers: { Authorization: "Bearer " + getToken() },
-    });
+    const response = await fetch(url, { headers: authHeaders() });
 
     if (!response.ok) throw new Error("Image request failed: " + response.status);
 
@@ -1303,10 +1427,7 @@
       // card.
       fetch("/item/reject-add", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer " + getToken(),
-        },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ name: pendingItem.name }),
       }).catch(function () {});
 
@@ -1404,21 +1525,16 @@
   }
 
   async function callApi(path, options) {
-    const token = getToken();
-
     const response = await fetch(path, {
       ...options,
-      headers: {
-        ...(options && options.headers),
-        Authorization: "Bearer " + token,
-      },
+      headers: authHeaders(options && options.headers),
     });
 
     if (response.status === 401) {
-      // Stored token is wrong or stale -- don't keep silently failing on
-      // every message, force re-entry instead.
+      // Session expired or stored token is wrong/stale -- don't keep
+      // silently failing on every message, force signing in again.
       clearToken();
-      showSetup("That token was rejected. Enter it again.");
+      showSetup("Please sign in again.");
       throw new Error("unauthorized");
     }
 
@@ -1505,6 +1621,14 @@
   tokenInput.addEventListener("keydown", function (e) {
     if (e.key === "Enter") tokenSave.click();
   });
+
+  showTokenBtn.addEventListener("click", function () {
+    googleSection.classList.add("hidden");
+    tokenSection.classList.remove("hidden");
+    tokenInput.focus();
+  });
+
+  signoutBtn.addEventListener("click", signOut);
 
   // ---- Bulk import: attach a text/CSV file, a PDF, or a photo of a
   // handwritten note. The server (agent/import_extractor.py) reads it
@@ -2120,10 +2244,7 @@
     // should never cause. Never blocks the actual cancel either way.
     fetch("/import/cancel", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "Bearer " + getToken(),
-      },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ item_count: pendingItems.length }),
     }).catch(function () {});
 
@@ -2548,14 +2669,28 @@
     inventoryOverlay.classList.add("hidden");
   });
 
-  // On load: if a token is already stored, go straight to chat --
-  // a wrong/stale one gets caught by the first 401 and bounces back
-  // to the setup screen (see callApi above).
-  if (getToken()) {
-    showChat();
-  } else {
+  // On load: a stored token or a live Google session goes straight to
+  // chat -- a wrong/expired one gets caught by the first 401 and bounces
+  // back to the sign-in screen (see callApi above).
+  (async function start() {
+    if (getToken()) {
+      showChat();
+      return;
+    }
+
+    try {
+      const me = await (await fetch("/auth/me")).json();
+
+      if (me.signed_in) {
+        showChat();
+        return;
+      }
+    } catch (e) {
+      // Fall through to the sign-in screen.
+    }
+
     showSetup();
-  }
+  })();
 })();
 </script>
 

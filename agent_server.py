@@ -45,7 +45,25 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from agent.compactor import compact_history
-from agent.config import AGENT_API_TOKEN, DEFAULT_MODEL, LLM_PROVIDER, PROJECT_ROOT
+from agent.config import (
+    AGENT_API_TOKEN,
+    ALLOWED_GOOGLE_EMAILS,
+    DEFAULT_MODEL,
+    GOOGLE_AUTH_ENABLED,
+    GOOGLE_CLIENT_ID,
+    LLM_PROVIDER,
+    PROJECT_ROOT,
+    SESSION_SECRET,
+    SESSION_TTL_SECONDS,
+)
+from agent.google_auth import (
+    SESSION_COOKIE,
+    cookie_value,
+    email_allowed,
+    make_session,
+    read_session,
+    verify_google_credential,
+)
 from agent.import_extractor import (
     apply_import_items,
     extract_from_image,
@@ -141,33 +159,92 @@ class Handler(BaseHTTPRequestHandler):
     # network, not LLM calls: those run between socket operations.
     timeout = 15
 
-    def _send_json(self, payload, status=200):
+    def _send_json(self, payload, status=200, extra_headers=()):
         body = json.dumps(payload).encode("utf-8")
 
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+
+        for name, value in extra_headers:
+            self.send_header(name, value)
+
         self.end_headers()
         self.wfile.write(body)
 
-    def _authorized(self):
+    def _bearer_ok(self):
         """
         Shared-secret check against AGENT_API_TOKEN (see config.py).
-        Expects `Authorization: Bearer <token>`. Every endpoint goes
-        through this, including /health -- there's no "harmless" public
-        endpoint here, and uniform is easier to reason about than
-        remembering which routes are exempt. hmac.compare_digest avoids
-        leaking the token one byte at a time via a timing side channel.
+        Expects `Authorization: Bearer <token>`. hmac.compare_digest
+        avoids leaking the token one byte at a time via a timing side
+        channel.
         """
         header = self.headers.get("Authorization", "")
         prefix = "Bearer "
 
-        if not header.startswith(prefix):
+        if not AGENT_API_TOKEN or not header.startswith(prefix):
             return False
 
         provided = header[len(prefix):].strip()
 
         return hmac.compare_digest(provided, AGENT_API_TOKEN)
+
+    def _session_email(self):
+        """
+        The signed-in Google email from the session cookie, or None.
+        The allowlist is re-checked here on every request (not only at
+        sign-in), so removing an address from ALLOWED_GOOGLE_EMAILS and
+        restarting locks that person out even if their cookie is valid.
+        """
+        if not GOOGLE_AUTH_ENABLED:
+            return None
+
+        value = cookie_value(self.headers.get("Cookie", ""), SESSION_COOKIE)
+        email = read_session(value, SESSION_SECRET)
+
+        return email if email_allowed(email, ALLOWED_GOOGLE_EMAILS) else None
+
+    def _authorized(self):
+        """
+        Either a valid bearer token (scripts, curl, local dev) or a valid
+        Google sign-in session cookie (the web UI). Every data endpoint
+        goes through this, including /health -- there's no "harmless"
+        public endpoint here, and uniform is easier to reason about than
+        remembering which routes are exempt.
+
+        A cookie is sent by the browser automatically, which a bearer
+        header is not -- so a request authenticated only by cookie that
+        changes anything must also carry `X-Requested-With: shop-ui`.
+        A page on another site can't add a custom header without a CORS
+        preflight this server never approves, which closes cross-site
+        request forgery without needing per-form tokens.
+        """
+        if self._bearer_ok():
+            return True
+
+        if self._session_email() is None:
+            return False
+
+        if self.command not in ("GET", "HEAD"):
+            return self.headers.get("X-Requested-With") == "shop-ui"
+
+        return True
+
+    def _session_cookie_header(self, value, max_age):
+        parts = [
+            f"{SESSION_COOKIE}={value}",
+            "Path=/",
+            f"Max-Age={max_age}",
+            "HttpOnly",
+            "SameSite=Lax",
+        ]
+
+        # Caddy sets X-Forwarded-Proto on the real deployment. Locally
+        # (plain http://localhost) a Secure cookie would never be stored.
+        if self.headers.get("X-Forwarded-Proto") == "https":
+            parts.append("Secure")
+
+        return ("Set-Cookie", "; ".join(parts))
 
     def _require_auth(self):
         if self._authorized():
@@ -212,6 +289,22 @@ class Handler(BaseHTTPRequestHandler):
             self._send_html(WEB_INDEX)
             return
 
+        # Public on purpose: the page needs these before it can know
+        # whether to show the Google button or the app. Neither reveals
+        # anything beyond "is Google sign-in on, and am I signed in".
+        if self.path == "/auth/config":
+            self._send_json(
+                {"google_client_id": GOOGLE_CLIENT_ID if GOOGLE_AUTH_ENABLED else None}
+            )
+            return
+
+        if self.path == "/auth/me":
+            email = self._session_email()
+            self._send_json(
+                {"signed_in": email is not None or self._bearer_ok(), "email": email}
+            )
+            return
+
         if not self._require_auth():
             return
 
@@ -247,7 +340,65 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send_json({"error": "not found"}, status=404)
 
+    def _handle_auth_google(self):
+        """
+        Exchanges a Google ID token (from the sign-in button) for this
+        app's own session cookie -- if, and only if, the verified email is
+        on the allowlist. Public by necessity (it's how you sign in), so
+        the body is size-capped and every failure is recorded.
+        """
+        if not GOOGLE_AUTH_ENABLED:
+            self._send_json({"error": "Google sign-in is not configured"}, status=503)
+            return
+
+        if int(self.headers.get("Content-Length", 0)) > 16384:
+            self._send_json({"error": "request too large"}, status=413)
+            return
+
+        try:
+            body = self._read_json_body()
+        except json.JSONDecodeError:
+            self._send_json({"error": "invalid JSON body"}, status=400)
+            return
+
+        try:
+            email = verify_google_credential(body.get("credential"), GOOGLE_CLIENT_ID)
+        except ValueError:
+            monitoring.record_auth_failure(self.path, self.client_address[0])
+            self._send_json({"error": "Google sign-in could not be verified"}, status=401)
+            return
+        except Exception:
+            # Not the caller's fault -- e.g. couldn't fetch Google's keys.
+            self._send_json({"error": "couldn't reach Google to verify sign-in"}, status=502)
+            return
+
+        if not email_allowed(email, ALLOWED_GOOGLE_EMAILS):
+            monitoring.record_auth_failure(self.path, self.client_address[0])
+            self._send_json(
+                {"error": f"{email} is not allowed to use this app"}, status=403
+            )
+            return
+
+        session = make_session(email, SESSION_SECRET, SESSION_TTL_SECONDS)
+        self._send_json(
+            {"signed_in": True, "email": email},
+            extra_headers=[self._session_cookie_header(session, SESSION_TTL_SECONDS)],
+        )
+
     def do_POST(self):
+        # Public: signing in can't require already being signed in. Signing
+        # out is harmless to anyone (it only clears the caller's own cookie).
+        if self.path == "/auth/google":
+            self._handle_auth_google()
+            return
+
+        if self.path == "/auth/logout":
+            self._send_json(
+                {"signed_in": False},
+                extra_headers=[self._session_cookie_header("", 0)],
+            )
+            return
+
         if not self._require_auth():
             return
 
@@ -628,6 +779,15 @@ def main():
 
     print(f"Inventory agent listening on http://{HOST}:{PORT}")
     print(f"LLM provider: {LLM_PROVIDER} (model: {DEFAULT_MODEL})")
+
+    if GOOGLE_AUTH_ENABLED:
+        print(f"Google sign-in: ON for {len(ALLOWED_GOOGLE_EMAILS)} allowed email(s)")
+    else:
+        print(
+            "Google sign-in: OFF (needs GOOGLE_CLIENT_ID, ALLOWED_GOOGLE_EMAILS "
+            "and SESSION_SECRET) -- bearer token only"
+        )
+
     print('POST /chat {"message": "..."} -> {"reply", "status", "image_url"?, "items"?}')
     print('POST /upload {"filename", "mime_type", "content_base64", "hint"?} -> extracted items (no writes)')
     print('POST /import/confirm {"items": [...]} -> applies them, returns per-item results')
@@ -636,6 +796,7 @@ def main():
     print('POST /inventory/set-price {"item", "cost_price"?, "sale_price"?} -> direct price edit')
     print('POST /item/confirm-add {...add_item args} -> writes a new item the owner accepted')
     print('POST /item/reject-add -> logs a rejected new-item proposal, writes nothing')
+    print("GET /auth/config, GET /auth/me, POST /auth/google, POST /auth/logout -> Google sign-in")
     print("GET /usage -> cumulative LLM calls/tokens/estimated cost, all time")
     print("GET /transcript -> saved conversation log (every /chat and /upload turn)")
     print("GET /stats -> backend-only: auth failures, failure rate, import reject rate")
