@@ -28,3 +28,7 @@ product_images/
 
 # Local secrets -- never commit
 .env
+
+# Pictures dropped in for the photo-upload tests (see artifacts/README.md)
+artifacts/*
+!artifacts/README.md
