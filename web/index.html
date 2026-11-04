@@ -563,6 +563,29 @@
     background: #1f232b;
   }
 
+  #inventory-table .image-cell-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .photo-btn {
+    background: #1f232b;
+    color: #cfd3dc;
+    border: 1px solid #2a2e37;
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .photo-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+
   #inventory-summary-bar {
     padding: 14px 16px;
     background: var(--panel);
@@ -964,7 +987,8 @@
             <th class="sortable" data-sort-key="name">Item <span class="sort-indicator"></span></th>
             <th>Image</th>
             <th class="num sortable" data-sort-key="current_quantity">Stock <span class="sort-indicator"></span></th>
-            <th class="num sortable" data-sort-key="cost_price">Price <span class="sort-indicator"></span></th>
+            <th class="num sortable" data-sort-key="cost_price">Cost <span class="sort-indicator"></span></th>
+            <th class="num sortable" data-sort-key="sale_price">Sale <span class="sort-indicator"></span></th>
           </tr>
         </thead>
         <tbody id="inventory-table-body"></tbody>
@@ -1247,7 +1271,8 @@
     table.className = "chat-items-table";
     table.innerHTML =
       "<thead><tr><th>Category</th><th>Item</th><th>Image</th>" +
-      "<th class=\"num\">Stock</th><th class=\"num\">Price</th></tr></thead>";
+      "<th class=\"num\">Stock</th><th class=\"num\">Cost</th>" +
+      "<th class=\"num\">Sale</th></tr></thead>";
 
     const tbody = document.createElement("tbody");
 
@@ -1279,6 +1304,12 @@
       priceCell.textContent =
         item.cost_price != null ? formatMoney(item.cost_price) : "--";
       row.appendChild(priceCell);
+
+      const salePriceCell = document.createElement("td");
+      salePriceCell.className = "num";
+      salePriceCell.textContent =
+        item.sale_price != null ? formatMoney(item.sale_price) : "--";
+      row.appendChild(salePriceCell);
 
       tbody.appendChild(row);
     });
@@ -2399,7 +2430,7 @@
   });
 
   async function openInventoryView() {
-    inventoryTableBody.innerHTML = "<tr><td colspan=\"5\">Loading...</td></tr>";
+    inventoryTableBody.innerHTML = "<tr><td colspan=\"6\">Loading...</td></tr>";
     inventoryOverlay.classList.remove("hidden");
 
     try {
@@ -2410,7 +2441,7 @@
     } catch (err) {
       if (err.message !== "unauthorized") {
         inventoryTableBody.innerHTML =
-          "<tr><td colspan=\"5\">Couldn't load inventory: " +
+          "<tr><td colspan=\"6\">Couldn't load inventory: " +
           err.message + "</td></tr>";
       }
     }
@@ -2425,7 +2456,7 @@
 
     if (items.length === 0) {
       inventoryTableBody.innerHTML =
-        "<tr><td colspan=\"5\">" +
+        "<tr><td colspan=\"6\">" +
         (inventoryItems.length === 0
           ? "No items in the catalog yet."
           : "No items match that filter.") +
@@ -2443,6 +2474,77 @@
     document.getElementById("stat-total-value").textContent = formatMoney(inventorySummary.total_value);
 
     updateSortIndicators();
+  }
+
+  // One shared hidden file input for every row's photo button. No
+  // `capture` attribute on purpose: on a phone that makes the OS offer
+  // "Take photo" and "Photo library" both, instead of forcing the camera.
+  const photoInput = document.createElement("input");
+  photoInput.type = "file";
+  photoInput.accept = "image/*";
+  photoInput.className = "hidden";
+  document.body.appendChild(photoInput);
+
+  // Phone photos are 3-12 MB; a catalog thumbnail doesn't need that.
+  // Redraws onto a canvas capped at 1280px on the long side and re-encodes
+  // as JPEG, which also bakes in the EXIF rotation and turns HEIC/other
+  // phone formats into something the server accepts. Returns base64 only.
+  async function resizeImageToBase64(file) {
+    const MAX_SIDE = 1280;
+    const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+    const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    if (bitmap.close) bitmap.close();
+
+    const blob = await new Promise(function (resolve) {
+      canvas.toBlob(resolve, "image/jpeg", 0.85);
+    });
+    if (!blob) throw new Error("Couldn't read that photo.");
+
+    return new Promise(function (resolve, reject) {
+      const reader = new FileReader();
+      reader.onload = function () {
+        resolve(String(reader.result).split(",")[1]);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  function pickPhotoFor(item, button) {
+    photoInput.value = "";
+    photoInput.onchange = async function () {
+      const file = photoInput.files && photoInput.files[0];
+      if (!file) return;
+
+      const originalTitle = button.title;
+      button.disabled = true;
+      button.textContent = "…";
+      button.title = "Uploading...";
+
+      try {
+        const content = await resizeImageToBase64(file);
+        const data = await callApi("/item/photo", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ item: item.name, content_base64: content }),
+        });
+
+        // Patch just this item and re-render rather than refetching, so
+        // the table keeps its scroll position and filter.
+        item.image_path = data.output.image_path;
+        renderInventoryTable();
+      } catch (err) {
+        button.disabled = false;
+        button.textContent = "⚠️";
+        button.title = "Upload failed (" + (err.message || originalTitle) + ") - tap to retry";
+      }
+    };
+    photoInput.click();
   }
 
   function buildInventoryRow(item) {
@@ -2464,10 +2566,26 @@
     const imageCell = document.createElement("td");
     row.appendChild(imageCell);
 
+    const imageInner = document.createElement("div");
+    imageInner.className = "image-cell-inner";
+    imageCell.appendChild(imageInner);
+
     if (item.image_path) {
       const imgUrl = "/product_images/" + item.image_path.split("/").pop();
-      appendAuthenticatedImage(imageCell, imgUrl, "inventory-row-image");
+      appendAuthenticatedImage(imageInner, imgUrl, "inventory-row-image");
     }
+
+    const photoBtn = document.createElement("button");
+    photoBtn.className = "photo-btn";
+    // Icon only: a text label here widens the Image column enough to push
+    // Stock/Price off a phone-width screen.
+    photoBtn.textContent = "📷";
+    photoBtn.title = item.image_path ? "Change this product's photo" : "Add a photo of this product";
+    photoBtn.setAttribute("aria-label", photoBtn.title);
+    photoBtn.addEventListener("click", function () {
+      pickPhotoFor(item, photoBtn);
+    });
+    imageInner.appendChild(photoBtn);
 
     const stockCell = document.createElement("td");
     stockCell.className = "num editable-cell";
@@ -2490,12 +2608,22 @@
     const priceCell = document.createElement("td");
     priceCell.className = "num editable-cell";
     priceCell.textContent = item.cost_price != null ? formatMoney(item.cost_price) : "--";
-    priceCell.title = "Tap to change price";
+    priceCell.title = "Tap to change cost price (what you pay the supplier)";
     priceCell.addEventListener("click", function () {
       if (priceCell.classList.contains("editing")) return;
-      openPriceEditor(priceCell, item);
+      openPriceEditor(priceCell, item, "cost_price");
     });
     row.appendChild(priceCell);
+
+    const salePriceCell = document.createElement("td");
+    salePriceCell.className = "num editable-cell";
+    salePriceCell.textContent = item.sale_price != null ? formatMoney(item.sale_price) : "--";
+    salePriceCell.title = "Tap to set sale price (what the customer pays)";
+    salePriceCell.addEventListener("click", function () {
+      if (salePriceCell.classList.contains("editing")) return;
+      openPriceEditor(salePriceCell, item, "sale_price");
+    });
+    row.appendChild(salePriceCell);
 
     return row;
   }
@@ -2613,7 +2741,9 @@
     qtyInput.focus();
   }
 
-  function openPriceEditor(cell, item) {
+  // `field` is "cost_price" (what the shop pays; what imports record) or
+  // "sale_price" (what a customer pays; entered per product here).
+  function openPriceEditor(cell, item, field) {
     if (activeEditCleanup) activeEditCleanup();
 
     const originalText = cell.textContent;
@@ -2629,8 +2759,8 @@
     const priceInput = document.createElement("input");
     priceInput.type = "number";
     priceInput.step = "any";
-    priceInput.placeholder = "Price";
-    priceInput.value = item.cost_price != null ? item.cost_price : "";
+    priceInput.placeholder = field === "sale_price" ? "Sale price" : "Cost price";
+    priceInput.value = item[field] != null ? item[field] : "";
     priceInput.className = "inline-edit-input";
 
     const controls = buildInlineEditButtons(cell, originalText, async function () {
@@ -2645,7 +2775,7 @@
         await callApi("/inventory/set-price", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ item: item.name, cost_price: newPrice }),
+          body: JSON.stringify({ item: item.name, [field]: newPrice }),
         });
         return null;
       } catch (err) {

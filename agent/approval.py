@@ -22,6 +22,7 @@ class ApprovalPolicy:
         "rename_item",
         "set_category",
         "set_price",
+        "set_image",
         "record_sale",
         "record_restock",
         "adjust_stock",

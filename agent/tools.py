@@ -44,6 +44,10 @@ def set_price_tool(item, cost_price=None, sale_price=None):
     )
 
 
+def set_image_tool(item, image_path):
+    return _wrap(inventory_db.set_image, item_name=item, image_path=image_path)
+
+
 def add_item_tool(
     name,
     category=None,
@@ -121,6 +125,9 @@ TOOL_FUNCTIONS = {
     "rename_item": rename_item_tool,
     "set_category": set_category_tool,
     "set_price": set_price_tool,
+    # Deliberately has no entry in TOOL_SCHEMAS: only the web UI's photo
+    # upload (POST /item/photo) calls this, never the LLM.
+    "set_image": set_image_tool,
     "search_items": search_items_tool,
     "record_sale": record_sale_tool,
     "record_restock": record_restock_tool,

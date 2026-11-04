@@ -181,6 +181,25 @@ def set_price(item_name, cost_price=None, sale_price=None):
     return {"item": item_name, "cost_price": new_cost, "sale_price": new_sale}
 
 
+def set_image(item_name, image_path):
+    """
+    Points an item at a product photo (a "product_images/<file>" path,
+    same shape bulk import stores). Replaces any previous photo; the old
+    file is left on disk rather than deleted, so a mistaken replacement
+    can't lose a picture. Quantity, price, and transaction history are
+    untouched.
+    """
+    with _connect() as conn:
+        _get_item_row(conn, item_name)  # raises ItemNotFound if missing
+
+        conn.execute(
+            "UPDATE items SET image_path = ? WHERE name = ?",
+            (image_path, item_name),
+        )
+
+    return {"item": item_name, "image_path": image_path}
+
+
 def add_item(
     name,
     category=None,

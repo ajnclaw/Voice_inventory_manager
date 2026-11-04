@@ -41,6 +41,7 @@ import os
 os.environ.setdefault("AGENT_AUTO_APPROVE", "1")
 
 import json
+import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -81,7 +82,7 @@ from agent import usage_tracker
 # sets AGENT_HOST=127.0.0.1 so only the reverse proxy (Caddy) on the same
 # machine can reach it, never the open internet directly.
 HOST = os.environ.get("AGENT_HOST", "0.0.0.0")
-PORT = 8766
+PORT = int(os.environ.get("AGENT_PORT", "8766"))
 
 KEEP_RECENT_TURNS = 5
 COMPACT_TRIGGER_TURNS = 10
@@ -104,6 +105,26 @@ IMAGE_CONTENT_TYPES = {
     ".webp": "image/webp",
     ".gif": "image/gif",
 }
+
+# A phone photo is resized in the browser before upload (see web/index.html),
+# so this only guards against a client that skips that.
+MAX_PHOTO_BYTES = 8 * 1024 * 1024
+
+
+def _sniff_image_extension(data):
+    """
+    File type from the bytes themselves, never from the client's claimed
+    mime type or filename -- the extension chosen here decides how
+    /product_images/ later serves the file back.
+    """
+    if data.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    return None
+
 
 responder = Responder()
 history = []
@@ -139,6 +160,7 @@ def _serialize_item_list(items):
                 "category": item.get("category"),
                 "current_quantity": item.get("current_quantity"),
                 "cost_price": item.get("cost_price"),
+                "sale_price": item.get("sale_price"),
                 "image_url": f"/product_images/{image_path.split('/')[-1]}"
                 if image_path
                 else None,
@@ -414,6 +436,8 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_inventory_tool("adjust_stock")
         elif self.path == "/inventory/set-price":
             self._handle_inventory_tool("set_price")
+        elif self.path == "/item/photo":
+            self._handle_item_photo()
         elif self.path == "/item/confirm-add":
             self._handle_item_confirm_add()
         elif self.path == "/item/reject-add":
@@ -681,6 +705,72 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send_json({"error": result.get("error") or "failed"}, status=400)
 
+    def _handle_item_photo(self):
+        """
+        Attaches a photo the owner took/picked on their phone to an
+        existing item, replacing its current picture. Direct table
+        action like the stock/price edits (no LLM involved): the file is
+        saved under product_images/ with a random name and the item's
+        image_path is pointed at it through the same tool_manager choke
+        point as every other inventory change.
+        """
+        try:
+            body = self._read_json_body()
+        except json.JSONDecodeError:
+            self._send_json({"error": "invalid JSON body"}, status=400)
+            return
+
+        item = (body.get("item") or "").strip()
+
+        if not item:
+            self._send_json({"error": "missing 'item'"}, status=400)
+            return
+
+        try:
+            data = base64.b64decode(body.get("content_base64") or "", validate=True)
+        except Exception:
+            self._send_json({"error": "invalid base64 content"}, status=400)
+            return
+
+        if not data:
+            self._send_json({"error": "missing 'content_base64'"}, status=400)
+            return
+
+        if len(data) > MAX_PHOTO_BYTES:
+            self._send_json({"error": "photo is too large"}, status=413)
+            return
+
+        extension = _sniff_image_extension(data)
+
+        if extension is None:
+            self._send_json({"error": "not a JPEG, PNG or WebP image"}, status=400)
+            return
+
+        IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+        filename = f"{uuid.uuid4().hex}{extension}"
+
+        run_logger = RunLogger("[inventory table: set_image]")
+        responder.tool_manager.set_logger(run_logger)
+
+        result = responder.tool_manager.execute(
+            "set_image", {"item": item, "image_path": f"product_images/{filename}"}
+        )
+
+        if result.get("success"):
+            # Written only once the item is known to exist, so a bad
+            # item name can't leave orphan files behind.
+            (IMAGE_DIR / filename).write_bytes(data)
+
+        run_logger.finalize("completed" if result.get("success") else "failed")
+        monitoring.record_request_outcome(
+            "inventory_set_image", "completed" if result.get("success") else "failed"
+        )
+
+        if result.get("success"):
+            self._send_json({"output": result.get("output")})
+        else:
+            self._send_json({"error": result.get("error") or "failed"}, status=400)
+
     def _handle_item_confirm_add(self):
         """
         Actually writes a new item that responder.py held back pending
@@ -794,6 +884,7 @@ def main():
     print("GET /inventory -> full catalog + summary totals (table view)")
     print('POST /inventory/adjust-stock {"item", "new_quantity", "reason"} -> direct stock edit')
     print('POST /inventory/set-price {"item", "cost_price"?, "sale_price"?} -> direct price edit')
+    print('POST /item/photo {"item", "content_base64"} -> attaches a product photo (JPEG/PNG/WebP)')
     print('POST /item/confirm-add {...add_item args} -> writes a new item the owner accepted')
     print('POST /item/reject-add -> logs a rejected new-item proposal, writes nothing')
     print("GET /auth/config, GET /auth/me, POST /auth/google, POST /auth/logout -> Google sign-in")
