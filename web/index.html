@@ -586,6 +586,37 @@
     cursor: default;
   }
 
+  .photo-menu {
+    position: fixed;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    min-width: 190px;
+    background: #1f232b;
+    border: 1px solid #2a2e37;
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+    overflow: hidden;
+  }
+
+  .photo-menu button {
+    background: none;
+    border: 0;
+    color: #e6e8ee;
+    font-size: 15px;
+    text-align: left;
+    padding: 14px 16px;
+    cursor: pointer;
+  }
+
+  .photo-menu button + button {
+    border-top: 1px solid #2a2e37;
+  }
+
+  .photo-menu button:active {
+    background: #2a2e37;
+  }
+
   #inventory-summary-bar {
     padding: 14px 16px;
     background: var(--panel);
@@ -2551,14 +2582,70 @@
     updateSortIndicators();
   }
 
-  // One shared hidden file input for every row's photo button. No
-  // `capture` attribute on purpose: on a phone that makes the OS offer
-  // "Take photo" and "Photo library" both, instead of forcing the camera.
-  const photoInput = document.createElement("input");
-  photoInput.type = "file";
-  photoInput.accept = "image/*";
-  photoInput.className = "hidden";
-  document.body.appendChild(photoInput);
+  // Two shared hidden file inputs for every row's photo button. A plain
+  // image input is left to the OS, and many phones then offer only the
+  // photo library; `capture` is what opens the camera straight away. So the
+  // button shows a small menu and each choice uses its own input.
+  const galleryInput = document.createElement("input");
+  galleryInput.type = "file";
+  galleryInput.accept = "image/*";
+  galleryInput.className = "hidden";
+  document.body.appendChild(galleryInput);
+
+  const cameraInput = document.createElement("input");
+  cameraInput.type = "file";
+  cameraInput.accept = "image/*";
+  cameraInput.setAttribute("capture", "environment");
+  cameraInput.className = "hidden";
+  document.body.appendChild(cameraInput);
+
+  let photoMenu = null;
+
+  function closePhotoMenu() {
+    if (photoMenu) {
+      photoMenu.remove();
+      photoMenu = null;
+    }
+  }
+
+  function showPhotoMenu(item, button) {
+    const alreadyOpenHere = photoMenu && photoMenu.dataset.item === item.name;
+    closePhotoMenu();
+    if (alreadyOpenHere) return;
+
+    photoMenu = document.createElement("div");
+    photoMenu.className = "photo-menu";
+    photoMenu.dataset.item = item.name;
+
+    [
+      ["📷 Take photo", cameraInput],
+      ["🖼️ Choose from gallery", galleryInput],
+    ].forEach(function (choice) {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.textContent = choice[0];
+      option.addEventListener("click", function () {
+        closePhotoMenu();
+        pickPhotoFor(item, button, choice[1]);
+      });
+      photoMenu.appendChild(option);
+    });
+
+    document.body.appendChild(photoMenu);
+
+    // Fixed-position under the button, kept inside the viewport.
+    const rect = button.getBoundingClientRect();
+    const width = photoMenu.offsetWidth;
+    photoMenu.style.top = Math.min(rect.bottom + 4, window.innerHeight - photoMenu.offsetHeight - 8) + "px";
+    photoMenu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)) + "px";
+  }
+
+  document.addEventListener("click", function (event) {
+    if (photoMenu && !photoMenu.contains(event.target) && !event.target.closest(".photo-btn")) {
+      closePhotoMenu();
+    }
+  });
+  window.addEventListener("scroll", closePhotoMenu, true);
 
   // Phone photos are 3-12 MB; a catalog thumbnail doesn't need that.
   // Redraws onto a canvas capped at 1280px on the long side and re-encodes
@@ -2590,10 +2677,10 @@
     });
   }
 
-  function pickPhotoFor(item, button) {
-    photoInput.value = "";
-    photoInput.onchange = async function () {
-      const file = photoInput.files && photoInput.files[0];
+  function pickPhotoFor(item, button, input) {
+    input.value = "";
+    input.onchange = async function () {
+      const file = input.files && input.files[0];
       if (!file) return;
 
       const originalTitle = button.title;
@@ -2619,7 +2706,7 @@
         button.title = "Upload failed (" + (err.message || originalTitle) + ") - tap to retry";
       }
     };
-    photoInput.click();
+    input.click();
   }
 
   function buildInventoryRow(item) {
@@ -2655,10 +2742,12 @@
     // Icon only: a text label here widens the Image column enough to push
     // Stock/Price off a phone-width screen.
     photoBtn.textContent = "📷";
-    photoBtn.title = item.image_path ? "Change this product's photo" : "Add a photo of this product";
+    photoBtn.title = item.image_path
+      ? "Change this product's photo (camera or gallery)"
+      : "Add a photo of this product (camera or gallery)";
     photoBtn.setAttribute("aria-label", photoBtn.title);
     photoBtn.addEventListener("click", function () {
-      pickPhotoFor(item, photoBtn);
+      showPhotoMenu(item, photoBtn);
     });
     imageInner.appendChild(photoBtn);
 
