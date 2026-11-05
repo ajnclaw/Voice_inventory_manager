@@ -77,7 +77,9 @@ back via `GET /usage`.
 ## `monitoring.db` -- `agent/monitoring.py`
 
 Backend-only system health. Never surfaced in `web/index.html` --
-read back via `GET /stats`, which the app's own UI never calls.
+read back via `GET /stats` (which the app's own UI never calls) and the
+admin dashboard (`/admin`). Columns and tables added later for per-user
+attribution are listed under "Attribution columns and tables" below.
 
 ### `auth_failures`
 Every rejected `Authorization` token.
@@ -139,6 +141,34 @@ Each line:
 `prompt_tokens`/`completion_tokens`/`cost_usd` are the *turn's* summed
 totals -- a turn can involve more than one LLM call (a tool-calling
 loop), not a single call's numbers.
+
+Lines written since per-user attribution also have `user` (email, or
+`bearer-token`), `session_id`, `run_id` (the trace file / `llm_calls.run_id`),
+`latency_seconds`, `input_mode` (`voice`/`text`/null) and `kind`
+(`chat`/`upload`). Older lines lack these keys and show as "unattributed".
+
+---
+
+## Attribution columns and tables (added later, additive)
+
+Added in place to existing databases on first start (see
+`agent/db_migrate.py`); older rows read NULL in the new columns.
+
+- `usage.db` `llm_calls`: `user_email`, `session_id`, `duration_seconds`
+  (time since the previous event in the run, the rule in
+  `agent/trace_timing.py`).
+- `monitoring.db` `auth_failures`: `status_code` (NULL = 401), `email`.
+  `request_outcomes`: `user_email`, `session_id`, `run_id`,
+  `duration_seconds`. `import_outcomes`: `user_email`, `session_id`.
+- `monitoring.db` new tables: `sessions` (id, user_email, started_at,
+  last_seen_at, remote_addr, user_agent; one row per idle-timeout session),
+  `sign_ins` (email, outcome `ok`/`blocked`/`invalid`, remote_addr),
+  `tool_calls` (run_id, user_email, session_id, `endpoint` = chat / upload /
+  import_confirm / table_adjust_stock / table_set_price / table_set_image /
+  confirm_add, tool_name, success, denied, error, duration_seconds, item,
+  arguments, result_count) and `feedback` (run_id, user_email, rating 1/-1;
+  one per user per reply).
+- `inventory.db` is unchanged: edits are attributed through `tool_calls`.
 
 ---
 

@@ -9,7 +9,9 @@ Run from the project root:
 
 import http.client
 import json
+import shutil
 import sys
+import tempfile
 import threading
 import unittest
 from http.server import HTTPServer
@@ -18,6 +20,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from _isolation import data_patches
 from agent import google_auth
 
 SECRET = "test-secret-not-used-anywhere-real"
@@ -99,7 +102,10 @@ class ServerHarness(unittest.TestCase):
         import agent_server
 
         cls.agent_server = agent_server
-        cls.patches = [
+        # Sessions, sign-ins etc. are recorded in monitoring.db; keep that
+        # (and every other store) out of the real files.
+        cls.tmp = Path(tempfile.mkdtemp(prefix="shop-test-"))
+        cls.patches = data_patches(cls.tmp) + [
             mock.patch.object(agent_server, "AGENT_API_TOKEN", cls.TOKEN),
             mock.patch.object(agent_server, "GOOGLE_AUTH_ENABLED", cls.GOOGLE_ON),
             mock.patch.object(agent_server, "GOOGLE_CLIENT_ID", "client-id.apps.googleusercontent.com"),
@@ -121,6 +127,7 @@ class ServerHarness(unittest.TestCase):
         cls.server.server_close()
         for p in cls.patches:
             p.stop()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def request(self, method, path, body=None, headers=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)

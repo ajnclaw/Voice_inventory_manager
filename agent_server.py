@@ -41,12 +41,15 @@ import os
 os.environ.setdefault("AGENT_AUTO_APPROVE", "1")
 
 import json
+import re
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from agent.compactor import compact_history
 from agent.config import (
+    ADMIN_GOOGLE_EMAILS,
     AGENT_API_TOKEN,
     ALLOWED_GOOGLE_EMAILS,
     DEFAULT_MODEL,
@@ -73,8 +76,9 @@ from agent.import_extractor import (
 )
 from agent.inventory_db import inventory_overview
 from agent.logger import RunLogger
-from agent import monitoring
+from agent import admin_metrics, monitoring, sessions
 from agent.responder import Responder
+from agent.sessions import BEARER_USER
 from agent.transcript_log import append_turn, read_all as read_transcript
 from agent import usage_tracker
 
@@ -95,6 +99,28 @@ COMPACT_TRIGGER_TURNS = 10
 # into this file on disk. Everything that actually touches inventory
 # data (/chat, /health, DELETE /history) still requires it.
 WEB_INDEX = (PROJECT_ROOT / "web" / "index.html").read_text(encoding="utf-8")
+
+# The admin page's HTML is NOT public like the page above: GET /admin only
+# serves it to a signed-in admin (see Handler._require_admin). Its data
+# comes from /admin/api/*, which are admin-only as well.
+WEB_ADMIN = (PROJECT_ROOT / "web" / "admin.html").read_text(encoding="utf-8")
+
+ADMIN_REFUSAL_PAGE = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{title}</title>
+<style>
+  body {{ margin: 0; min-height: 100vh; display: grid; place-items: center;
+         background: #0f1115; color: #e8eaed; font-family: system-ui, sans-serif; }}
+  main {{ max-width: 420px; padding: 24px 16px; text-align: center; }}
+  a {{ color: #6ea0f5; }}
+</style></head><body><main>
+<h1>{title}</h1><p>{message}</p><p><a href="/">Back to the app</a></p>
+</main></body></html>"""
+
+# A run id as logger.py makes them: 20250101T120000Z_ab12cd34.
+RUN_ID_PATTERN = re.compile(r"^[0-9]{8}T[0-9]{6}Z_[0-9a-f]{8}$")
 
 IMAGE_DIR = PROJECT_ROOT / "product_images"
 
@@ -127,7 +153,13 @@ def _sniff_image_extension(data):
 
 
 responder = Responder()
-history = []
+
+# One conversation history PER USER (keyed by signed-in email, or the
+# shared BEARER_USER label for token callers), not one list for everybody:
+# with several people on the app, a single global list would feed one
+# person's messages into another's context. In memory only, as before --
+# a restart clears it. DELETE /history clears just the caller's own.
+histories = {}
 
 
 def _serialize_item_list(items):
@@ -268,8 +300,53 @@ class Handler(BaseHTTPRequestHandler):
 
         return ("Set-Cookie", "; ".join(parts))
 
+    # Who the current request is, and which session it belongs to --
+    # filled in by _require_auth and stamped on everything the handlers
+    # record. A fresh Handler is made per connection; the defaults keep a
+    # handler that never authenticated from carrying anyone's identity.
+    user = None
+    session_id = None
+
+    def _identity(self):
+        """
+        The signed-in email if there is one, else BEARER_USER for the
+        shared token, else None. Cookie wins when both are present: the
+        web UI may send a stored token alongside its cookie, and the
+        person is who the cookie says.
+        """
+        email = self._session_email()
+
+        if email is not None:
+            return email
+
+        return BEARER_USER if self._bearer_ok() else None
+
+    def _is_admin(self):
+        """
+        Admin = a signed-in Google user whose email is in
+        ADMIN_GOOGLE_EMAILS. Never the bearer token, and never when
+        Google sign-in is off: fails closed.
+        """
+        return GOOGLE_AUTH_ENABLED and self._session_email() in ADMIN_GOOGLE_EMAILS
+
     def _require_auth(self):
         if self._authorized():
+            self.user = self._identity()
+            self.session_id = None
+
+            # Pictures are fetched in bulk and the admin pages are not shop
+            # activity: neither should open or extend a session.
+            if not self.path.startswith(("/product_images/", "/admin")):
+                try:
+                    self.session_id = sessions.touch(
+                        self.user,
+                        remote_addr=self.client_address[0],
+                        user_agent=self.headers.get("User-Agent"),
+                    )
+                except Exception:
+                    # Session bookkeeping must never take the app down.
+                    pass
+
             return True
 
         # Silent before this -- a wrong/missing token just got a 401
@@ -279,6 +356,46 @@ class Handler(BaseHTTPRequestHandler):
         monitoring.record_auth_failure(self.path, self.client_address[0])
         self._send_json({"error": "unauthorized"}, status=401)
         return False
+
+    def _require_admin(self, page=False):
+        """
+        401 if not signed in at all, 403 if signed in but not an admin.
+        `page` makes the refusal a small HTML page (for someone who typed
+        /admin into a browser) instead of JSON; the status code is the
+        same either way. A 403 is recorded like a 401 is -- somebody
+        poking at an admin URL they shouldn't is worth a trail.
+        """
+        if not self._authorized():
+            monitoring.record_auth_failure(self.path, self.client_address[0])
+
+            if page:
+                self._send_html(ADMIN_REFUSAL_PAGE.format(
+                    title="Sign in required",
+                    message="Open the app and sign in with an admin Google account.",
+                ), status=401)
+            else:
+                self._send_json({"error": "unauthorized"}, status=401)
+
+            return False
+
+        if not self._is_admin():
+            monitoring.record_auth_failure(
+                self.path, self.client_address[0],
+                status_code=403, email=self._identity(),
+            )
+
+            if page:
+                self._send_html(ADMIN_REFUSAL_PAGE.format(
+                    title="Admins only",
+                    message="This account doesn't have admin access.",
+                ), status=403)
+            else:
+                self._send_json({"error": "forbidden"}, status=403)
+
+            return False
+
+        self.user = self._session_email()
+        return True
 
     def _send_html(self, body_text, status=200):
         body = body_text.encode("utf-8")
@@ -311,6 +428,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send_html(WEB_INDEX)
             return
 
+        url = urlparse(self.path)
+
+        if url.path == "/admin":
+            if self._require_admin(page=True):
+                self._send_html(WEB_ADMIN)
+
+            return
+
+        if url.path.startswith("/admin/api/"):
+            if self._require_admin():
+                self._handle_admin_api(url.path, parse_qs(url.query))
+
+            return
+
         # Public on purpose: the page needs these before it can know
         # whether to show the Google button or the app. Neither reveals
         # anything beyond "is Google sign-in on, and am I signed in".
@@ -322,9 +453,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path == "/auth/me":
             email = self._session_email()
-            self._send_json(
-                {"signed_in": email is not None or self._bearer_ok(), "email": email}
-            )
+            payload = {"signed_in": email is not None or self._bearer_ok(), "email": email}
+
+            # Only present for an admin, so the page can show its Admin
+            # link; absent (not false) for everyone else.
+            if GOOGLE_AUTH_ENABLED and email in ADMIN_GOOGLE_EMAILS:
+                payload["admin"] = True
+
+            self._send_json(payload)
             return
 
         if not self._require_auth():
@@ -334,8 +470,17 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_product_image()
             return
 
+        # These three show EVERY user's activity (all conversations, all
+        # spend), so a signed-in non-admin must not read them. The bearer
+        # token keeps access: it is how scripts/curl already use them.
+        if self.path in ("/usage", "/transcript", "/stats") and not (
+            self._bearer_ok() or self._is_admin()
+        ):
+            self._send_json({"error": "forbidden"}, status=403)
+            return
+
         if self.path == "/health":
-            self._send_json({"status": "ok", "turns": len(history)})
+            self._send_json({"status": "ok", "turns": len(histories.get(self.user, []))})
         elif self.path == "/inventory":
             # Dedicated structured view, bypassing the LLM entirely --
             # a real table + totals is more reliably "human readable"
@@ -387,6 +532,7 @@ class Handler(BaseHTTPRequestHandler):
             email = verify_google_credential(body.get("credential"), GOOGLE_CLIENT_ID)
         except ValueError:
             monitoring.record_auth_failure(self.path, self.client_address[0])
+            monitoring.record_sign_in(None, "invalid", self.client_address[0])
             self._send_json({"error": "Google sign-in could not be verified"}, status=401)
             return
         except Exception:
@@ -395,11 +541,25 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if not email_allowed(email, ALLOWED_GOOGLE_EMAILS):
-            monitoring.record_auth_failure(self.path, self.client_address[0])
+            monitoring.record_auth_failure(
+                self.path, self.client_address[0], status_code=403, email=email
+            )
+            monitoring.record_sign_in(email, "blocked", self.client_address[0])
             self._send_json(
                 {"error": f"{email} is not allowed to use this app"}, status=403
             )
             return
+
+        monitoring.record_sign_in(email, "ok", self.client_address[0])
+
+        try:
+            sessions.touch(
+                email,
+                remote_addr=self.client_address[0],
+                user_agent=self.headers.get("User-Agent"),
+            )
+        except Exception:
+            pass
 
         session = make_session(email, SESSION_SECRET, SESSION_TTL_SECONDS)
         self._send_json(
@@ -442,6 +602,8 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_item_confirm_add()
         elif self.path == "/item/reject-add":
             self._handle_item_reject_add()
+        elif self.path == "/feedback":
+            self._handle_feedback()
         else:
             self._send_json({"error": "not found"}, status=404)
 
@@ -463,9 +625,19 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "missing 'message'"}, status=400)
             return
 
-        global history
+        # How the message arrived, as reported by the page: "voice" when it
+        # came from the mic button, else "text". Anything else (or a
+        # client that doesn't say, like curl) is recorded as unknown.
+        input_mode = body.get("input_mode")
 
-        run_logger = RunLogger(user_input)
+        if input_mode not in ("voice", "text"):
+            input_mode = None
+
+        history = histories.get(self.user, [])
+
+        run_logger = RunLogger(
+            user_input, user=self.user, session_id=self.session_id, endpoint="chat"
+        )
         responder.set_logger(run_logger)
 
         image_path = None
@@ -484,7 +656,12 @@ class Handler(BaseHTTPRequestHandler):
             status = "failed"
 
         run_logger.finalize(status)
-        monitoring.record_request_outcome("chat", status)
+        latency = run_logger.trace["duration_seconds"]
+        monitoring.record_request_outcome(
+            "chat", status,
+            user_email=self.user, session_id=self.session_id,
+            run_id=run_logger.run_id, duration_seconds=latency,
+        )
 
         # The continuous, human-readable conversation record (separate
         # from the detailed per-request trace run_logger just wrote) --
@@ -499,10 +676,16 @@ class Handler(BaseHTTPRequestHandler):
             run_logger.trace["total_prompt_tokens"],
             run_logger.trace["total_completion_tokens"],
             run_logger.trace["total_cost_usd"],
+            user=self.user,
+            session_id=self.session_id,
+            run_id=run_logger.run_id,
+            latency_seconds=latency,
+            input_mode=input_mode,
         )
 
         history.append({"user_input": user_input, "reply": reply})
-        history = compact_history(
+        histories[self.user] = history
+        histories[self.user] = compact_history(
             history,
             keep_recent=KEEP_RECENT_TURNS,
             trigger_at=COMPACT_TRIGGER_TURNS,
@@ -513,6 +696,7 @@ class Handler(BaseHTTPRequestHandler):
             {
                 "reply": reply,
                 "status": status,
+                "run_id": run_logger.run_id,
                 "image_url": f"/product_images/{image_path.split('/')[-1]}"
                 if image_path
                 else None,
@@ -520,6 +704,48 @@ class Handler(BaseHTTPRequestHandler):
                 "pending_new_item": pending_new_item,
             }
         )
+
+    def _handle_admin_api(self, path, query):
+        """
+        Read-only JSON for the admin dashboard (web/admin.html). Already
+        past _require_admin by the time this runs. All computation lives in
+        agent/admin_metrics.py; this only parses the query string.
+        """
+        try:
+            days = int((query.get("days") or ["30"])[0])
+        except ValueError:
+            days = 30
+
+        # 0 means "all time"; anything else is clamped to a sane window.
+        days = 0 if days <= 0 else min(days, 3650)
+
+        who = {"allowed_emails": ALLOWED_GOOGLE_EMAILS, "admin_emails": ADMIN_GOOGLE_EMAILS}
+
+        if path == "/admin/api/overview":
+            self._send_json(admin_metrics.overview(days=days, **who))
+        elif path == "/admin/api/user":
+            email = (query.get("email") or [""])[0]
+
+            if not email:
+                self._send_json({"error": "missing 'email'"}, status=400)
+                return
+
+            self._send_json(admin_metrics.user_detail(email, days=days, **who))
+        elif path == "/admin/api/turn":
+            run_id = (query.get("run_id") or [""])[0]
+
+            if not RUN_ID_PATTERN.match(run_id):
+                self._send_json({"error": "invalid 'run_id'"}, status=400)
+                return
+
+            detail = admin_metrics.turn_detail(run_id)
+
+            if detail is None:
+                self._send_json({"error": "not found"}, status=404)
+            else:
+                self._send_json(detail)
+        else:
+            self._send_json({"error": "not found"}, status=404)
 
     def _handle_product_image(self):
         """
@@ -582,7 +808,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "invalid base64 content"}, status=400)
             return
 
-        run_logger = RunLogger(f"[upload: {filename or mime_type or 'unnamed file'}]")
+        run_logger = RunLogger(
+            f"[upload: {filename or mime_type or 'unnamed file'}]",
+            user=self.user, session_id=self.session_id, endpoint="upload",
+        )
 
         try:
             if filename.endswith(".pdf") or mime_type == "application/pdf":
@@ -605,7 +834,12 @@ class Handler(BaseHTTPRequestHandler):
                 "upload_failed", f"Extraction raised: {exc}", level="error"
             )
             run_logger.finalize("failed")
-            monitoring.record_request_outcome("upload", "failed")
+            monitoring.record_request_outcome(
+                "upload", "failed",
+                user_email=self.user, session_id=self.session_id,
+                run_id=run_logger.run_id,
+                duration_seconds=run_logger.trace["duration_seconds"],
+            )
             self._send_json({"error": f"Couldn't read that file: {exc}"}, status=500)
             return
 
@@ -614,7 +848,12 @@ class Handler(BaseHTTPRequestHandler):
             f"Extracted {len(result.get('items', []))} item(s): {result.get('summary', '')}",
         )
         run_logger.finalize("completed")
-        monitoring.record_request_outcome("upload", "completed")
+        latency = run_logger.trace["duration_seconds"]
+        monitoring.record_request_outcome(
+            "upload", "completed",
+            user_email=self.user, session_id=self.session_id,
+            run_id=run_logger.run_id, duration_seconds=latency,
+        )
 
         append_turn(
             f"[upload: {filename or mime_type or 'unnamed file'}]",
@@ -624,6 +863,11 @@ class Handler(BaseHTTPRequestHandler):
             run_logger.trace["total_prompt_tokens"],
             run_logger.trace["total_completion_tokens"],
             run_logger.trace["total_cost_usd"],
+            user=self.user,
+            session_id=self.session_id,
+            run_id=run_logger.run_id,
+            latency_seconds=latency,
+            kind="upload",
         )
 
         self._send_json(result)
@@ -647,13 +891,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "missing/empty 'items' list"}, status=400)
             return
 
-        run_logger = RunLogger("[bulk import confirm]")
+        run_logger = RunLogger(
+            "[bulk import confirm]",
+            user=self.user, session_id=self.session_id, endpoint="import_confirm",
+        )
         responder.tool_manager.set_logger(run_logger)
 
         results = apply_import_items(items, responder.tool_manager)
 
         run_logger.finalize("completed")
-        monitoring.record_import_outcome("confirmed", len(items))
+        monitoring.record_import_outcome(
+            "confirmed", len(items), user_email=self.user, session_id=self.session_id
+        )
 
         self._send_json({"results": results})
 
@@ -690,14 +939,20 @@ class Handler(BaseHTTPRequestHandler):
             arguments["cost_price"] = body.get("cost_price")
             arguments["sale_price"] = body.get("sale_price")
 
-        run_logger = RunLogger(f"[inventory table: {tool_name}]")
+        run_logger = RunLogger(
+            f"[inventory table: {tool_name}]",
+            user=self.user, session_id=self.session_id, endpoint=f"table_{tool_name}",
+        )
         responder.tool_manager.set_logger(run_logger)
 
         result = responder.tool_manager.execute(tool_name, arguments)
 
         run_logger.finalize("completed" if result.get("success") else "failed")
         monitoring.record_request_outcome(
-            f"inventory_{tool_name}", "completed" if result.get("success") else "failed"
+            f"inventory_{tool_name}", "completed" if result.get("success") else "failed",
+            user_email=self.user, session_id=self.session_id,
+            run_id=run_logger.run_id,
+            duration_seconds=run_logger.trace["duration_seconds"],
         )
 
         if result.get("success"):
@@ -749,7 +1004,10 @@ class Handler(BaseHTTPRequestHandler):
         IMAGE_DIR.mkdir(parents=True, exist_ok=True)
         filename = f"{uuid.uuid4().hex}{extension}"
 
-        run_logger = RunLogger("[inventory table: set_image]")
+        run_logger = RunLogger(
+            "[inventory table: set_image]",
+            user=self.user, session_id=self.session_id, endpoint="table_set_image",
+        )
         responder.tool_manager.set_logger(run_logger)
 
         result = responder.tool_manager.execute(
@@ -763,7 +1021,10 @@ class Handler(BaseHTTPRequestHandler):
 
         run_logger.finalize("completed" if result.get("success") else "failed")
         monitoring.record_request_outcome(
-            "inventory_set_image", "completed" if result.get("success") else "failed"
+            "inventory_set_image", "completed" if result.get("success") else "failed",
+            user_email=self.user, session_id=self.session_id,
+            run_id=run_logger.run_id,
+            duration_seconds=run_logger.trace["duration_seconds"],
         )
 
         if result.get("success"):
@@ -791,14 +1052,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "missing 'name'"}, status=400)
             return
 
-        run_logger = RunLogger("[new item confirmed by owner]")
+        run_logger = RunLogger(
+            "[new item confirmed by owner]",
+            user=self.user, session_id=self.session_id, endpoint="confirm_add",
+        )
         responder.tool_manager.set_logger(run_logger)
 
         result = responder.tool_manager.execute("add_item", body)
 
         run_logger.finalize("completed" if result.get("success") else "failed")
         monitoring.record_request_outcome(
-            "item_confirm_add", "completed" if result.get("success") else "failed"
+            "item_confirm_add", "completed" if result.get("success") else "failed",
+            user_email=self.user, session_id=self.session_id,
+            run_id=run_logger.run_id,
+            duration_seconds=run_logger.trace["duration_seconds"],
         )
 
         if result.get("success"):
@@ -817,7 +1084,46 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             body = {}
 
-        monitoring.record_request_outcome("item_reject_add", "rejected")
+        monitoring.record_request_outcome(
+            "item_reject_add", "rejected",
+            user_email=self.user, session_id=self.session_id,
+        )
+        self._send_json({"status": "noted"})
+
+    def _handle_feedback(self):
+        """
+        A thumbs up/down on one assistant reply, from the buttons under it
+        in the chat. `run_id` is the one /chat returned. It only feeds
+        the admin dashboard's quality section; nothing is changed or sent
+        back to the model.
+        """
+        try:
+            body = self._read_json_body()
+        except json.JSONDecodeError:
+            self._send_json({"error": "invalid JSON body"}, status=400)
+            return
+
+        run_id = body.get("run_id")
+        raw_rating = body.get("rating")
+        rating = (
+            {"up": 1, 1: 1, "down": -1, -1: -1}.get(raw_rating)
+            if isinstance(raw_rating, (str, int))
+            else None
+        )
+
+        if not isinstance(run_id, str) or not RUN_ID_PATTERN.match(run_id):
+            self._send_json({"error": "invalid 'run_id'"}, status=400)
+            return
+
+        if rating is None:
+            self._send_json({"error": "'rating' must be 'up' or 'down'"}, status=400)
+            return
+
+        monitoring.record_feedback(
+            run_id, rating,
+            user_email=self.user, session_id=self.session_id,
+            comment=body.get("comment"),
+        )
         self._send_json({"status": "noted"})
 
     def _handle_import_cancel(self):
@@ -835,7 +1141,9 @@ class Handler(BaseHTTPRequestHandler):
             body = {}
 
         item_count = body.get("item_count")
-        monitoring.record_import_outcome("cancelled", item_count)
+        monitoring.record_import_outcome(
+            "cancelled", item_count, user_email=self.user, session_id=self.session_id
+        )
         self._send_json({"status": "noted"})
 
     def do_DELETE(self):
@@ -843,8 +1151,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if self.path == "/history":
-            global history
-            history = []
+            histories.pop(self.user, None)
             self._send_json({"status": "cleared"})
         else:
             self._send_json({"error": "not found"}, status=404)
@@ -878,7 +1185,17 @@ def main():
             "and SESSION_SECRET) -- bearer token only"
         )
 
-    print('POST /chat {"message": "..."} -> {"reply", "status", "image_url"?, "items"?}')
+    if ADMIN_GOOGLE_EMAILS and GOOGLE_AUTH_ENABLED:
+        print(f"Admin dashboard (/admin): ON for {len(ADMIN_GOOGLE_EMAILS)} admin(s)")
+    else:
+        print(
+            "Admin dashboard (/admin): OFF (needs Google sign-in plus "
+            "ADMIN_GOOGLE_EMAILS, each admin also on ALLOWED_GOOGLE_EMAILS)"
+        )
+
+    print('POST /chat {"message": "..."} -> {"reply", "status", "run_id", "image_url"?, "items"?}')
+    print('POST /feedback {"run_id", "rating": "up"|"down"} -> thumbs on a reply')
+    print("GET /admin, GET /admin/api/{overview,user,turn} -> admin-only dashboard")
     print('POST /upload {"filename", "mime_type", "content_base64", "hint"?} -> extracted items (no writes)')
     print('POST /import/confirm {"items": [...]} -> applies them, returns per-item results')
     print("GET /inventory -> full catalog + summary totals (table view)")

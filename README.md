@@ -87,11 +87,61 @@ Run it from the project root: `inventory.db`, `usage.db`,
 created in the current directory. See [DATA.md](DATA.md) for what lives
 where. Back up `inventory.db`; it is the shop's real records.
 
-Tests (auth layer):
+Tests (auth, photo/prices, admin dashboard). They use throwaway databases
+and never touch the real data files:
 
 ```bash
 .venv/bin/python3 -m unittest discover -s tests -v
 ```
+
+## Admin dashboard
+
+`/admin` is a separate page, visible only to admins, that shows how well
+the assistant is doing and where it falls short. Sections are ordered by
+importance: quality and gaps, cost, usage, speed, feature adoption, data
+health, security. Click a user for their totals and every session, turn by
+turn (message, reply, status, tokens, cost, latency, tools called), with
+problem turns highlighted and a step-by-step trace for any run.
+
+**Access.** Set `ADMIN_GOOGLE_EMAILS` (comma-separated). Every admin must
+also be on `ALLOWED_GOOGLE_EMAILS`; an address listed only as admin is
+ignored. Unset or empty means nobody is an admin. The shared bearer token is
+**never** an admin, and with Google sign-in off there are no admins. Signed
+out gets 401, signed in but not an admin gets 403 (both recorded as auth
+failures). The dashboard routes are read-only `GET`s; the one new write,
+`POST /feedback`, follows the same CSRF-header rule as every other
+cookie-authenticated write. The admin button in the chat header appears only
+for admins.
+
+**Who did what.** Chat turns, LLM calls, tool calls, imports, table edits,
+photo uploads, feedback and sign-ins now carry the signed-in email (the
+bearer token is recorded as its own identity, `bearer-token`) and a session
+id. A session is one user's activity with no gap over `SESSION_IDLE_MINUTES`
+(default 30). Conversation history is now **per user** instead of one list
+shared by everyone, and `DELETE /history` clears only the caller's own.
+`/usage`, `/transcript` and `/stats` show every user's activity, so they are
+now limited to admins and the bearer token.
+
+**Existing data.** The new columns and tables are added to the existing
+SQLite files in place, additive only, on first start; nothing is rewritten
+or dropped, and `inventory.db` is not touched. Rows from before this change
+have no user and show as "(unattributed)"; their sessions are inferred from
+gaps in the timeline and marked "inferred".
+
+**Reading the numbers.**
+
+- Cost comes from the price table in `agent/pricing.py`. A model that is not
+  in it has token counts but no cost; the page says how many calls are
+  unpriced, so the dollar total is then a lower bound.
+- "Couldn't find / do", "asked which one" and "corrected by the user" are
+  keyword and timing heuristics over the replies (English and Hinglish),
+  defined at the top of `agent/admin_metrics.py`. They point at turns worth
+  reading, not exact counts. Thumbs up/down appear under each reply in the
+  chat.
+- Latency is server-side only (LLM + tool time); browser speech-to-text and
+  playback are not included, and turns from before timing was recorded have
+  none.
+- Days and hours use `ADMIN_TIMEZONE` (default `Asia/Kolkata`).
 
 ## HTTP API
 
@@ -99,7 +149,8 @@ Tests (auth layer):
 GET    /                      web UI
 GET    /health                liveness
 GET    /inventory             catalog + totals (no LLM call)
-POST   /chat                  {"message": "..."} -> {"reply", "status"}
+POST   /chat                  {"message": "..."} -> {"reply", "status", "run_id"}
+POST   /feedback              {"run_id", "rating": "up"|"down"} thumbs on a reply
 POST   /upload                file (CSV / PDF / photo) -> extracted candidates, no writes
 POST   /import/confirm        {"items": [...]} -> applies reviewed items
 POST   /import/cancel         rejection signal for monitoring
@@ -107,7 +158,11 @@ POST   /item/confirm-add      accept an agent-proposed new item
 POST   /item/reject-add       reject it
 POST   /inventory/adjust-stock, /inventory/set-price   inline table edits
 DELETE /history               clear conversation history
-GET    /usage /transcript /stats   cost, saved chats, failure rates
+GET    /usage /transcript /stats   cost, saved chats, failure rates (admins / bearer token)
+GET    /admin                 admin dashboard page (admins only)
+GET    /admin/api/overview?days=30      dashboard data (0 = all time)
+GET    /admin/api/user?email=...&days=  one user's totals and sessions
+GET    /admin/api/turn?run_id=...       step-by-step trace of one run
 ```
 
 ## Deployment

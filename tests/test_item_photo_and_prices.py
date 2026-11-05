@@ -26,6 +26,8 @@ from unittest import mock
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_DIR))
 
+from _isolation import data_patches
+
 TOKEN = "test-bearer-token"
 ARTIFACTS_DIR = PROJECT_DIR / "artifacts"
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
@@ -71,8 +73,9 @@ class PhotoAndPriceServerTests(unittest.TestCase):
         # Guard: never let this suite touch the real data by accident.
         assert cls.db_path != PROJECT_DIR / "inventory.db"
 
-        cls.patches = [
-            mock.patch.object(inventory_db, "INVENTORY_DB", cls.db_path),
+        # data_patches also points INVENTORY_DB at cls.db_path and keeps
+        # sessions/monitoring/usage/transcripts out of the real files.
+        cls.patches = data_patches(cls.tmp) + [
             mock.patch.object(agent_server, "IMAGE_DIR", cls.image_dir),
             mock.patch.object(agent_server, "AGENT_API_TOKEN", TOKEN),
             mock.patch.object(agent_server, "GOOGLE_AUTH_ENABLED", False),

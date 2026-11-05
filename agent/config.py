@@ -59,6 +59,37 @@ GOOGLE_AUTH_ENABLED = bool(
     GOOGLE_CLIENT_ID and ALLOWED_GOOGLE_EMAILS and SESSION_SECRET
 )
 
+
+def parse_email_set(raw):
+    return {email.strip().lower() for email in (raw or "").split(",") if email.strip()}
+
+
+def admin_emails(raw, allowed):
+    """
+    Who may open the admin dashboard: the emails in ADMIN_GOOGLE_EMAILS
+    that are ALSO on the sign-in allowlist. An admin who can't sign in
+    can't be an admin, so an address listed only as admin is dropped
+    rather than trusted. Empty/unset means nobody is an admin (fails
+    closed), and the shared bearer token is never an admin either --
+    it is one secret held by a phone and scripts, not a person.
+    """
+    return parse_email_set(raw) & set(allowed)
+
+
+ADMIN_GOOGLE_EMAILS = admin_emails(
+    os.environ.get("ADMIN_GOOGLE_EMAILS", ""), ALLOWED_GOOGLE_EMAILS
+)
+ADMIN_ENABLED = GOOGLE_AUTH_ENABLED and bool(ADMIN_GOOGLE_EMAILS)
+
+# A "session" is a run of one user's activity with no gap longer than
+# this. The signed cookie itself lives for SESSION_TTL_DAYS, far too long
+# to mean "one sitting", so sessions are tracked server-side (see
+# agent/sessions.py).
+SESSION_IDLE_SECONDS = int(os.environ.get("SESSION_IDLE_MINUTES", "30")) * 60
+
+# Timezone the dashboard buckets days and hours in (the shop's, not UTC).
+ADMIN_TIMEZONE = os.environ.get("ADMIN_TIMEZONE", "Asia/Kolkata")
+
 # ---------------------------------------------------------------------------
 # LLM provider selection -- same provider-agnostic setup as ~/ai-agent's
 # llm_client.py: every provider here exposes an OpenAI-compatible

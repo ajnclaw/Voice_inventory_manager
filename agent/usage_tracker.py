@@ -9,6 +9,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from .config import PROJECT_ROOT
+from .db_migrate import ensure_columns
 
 USAGE_DB = PROJECT_ROOT / "usage.db"
 
@@ -30,18 +31,31 @@ def _connect():
         )
         """
     )
+    # Who made the call and how long it took -- added after the table
+    # held real rows; older rows read NULL ("unattributed" in the admin
+    # dashboard).
+    ensure_columns(
+        conn,
+        "llm_calls",
+        {"user_email": "TEXT", "session_id": "TEXT", "duration_seconds": "REAL"},
+    )
     return conn
 
 
-def record_call(run_id, component, model, prompt_tokens, completion_tokens, cost_usd):
+def record_call(
+    run_id, component, model, prompt_tokens, completion_tokens, cost_usd,
+    user_email=None, session_id=None, duration_seconds=None,
+):
     with _connect() as conn:
         conn.execute(
             "INSERT INTO llm_calls "
-            "(run_id, component, model, prompt_tokens, completion_tokens, cost_usd, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(run_id, component, model, prompt_tokens, completion_tokens, cost_usd, "
+            "created_at, user_email, session_id, duration_seconds) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 run_id, component, model, prompt_tokens, completion_tokens,
                 cost_usd, datetime.now(timezone.utc).isoformat(),
+                user_email, session_id, duration_seconds,
             ),
         )
 

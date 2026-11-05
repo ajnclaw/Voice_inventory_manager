@@ -22,7 +22,18 @@ from .config import PROJECT_ROOT
 TRANSCRIPT_PATH = PROJECT_ROOT / "transcripts.jsonl"
 
 
-def append_turn(user_input, reply, status, model, prompt_tokens, completion_tokens, cost_usd):
+def append_turn(
+    user_input, reply, status, model, prompt_tokens, completion_tokens, cost_usd,
+    user=None, session_id=None, run_id=None, latency_seconds=None,
+    input_mode=None, kind="chat",
+):
+    """
+    The trailing keyword fields attribute the turn (who, which session,
+    which run -- the same run_id as logs/<run_id>.json and the llm_calls
+    rows) and say how it arrived: input_mode "voice"/"text", kind "chat"
+    or "upload". Lines written before they existed simply lack the keys;
+    readers treat that as "unattributed".
+    """
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "user_input": user_input,
@@ -32,6 +43,12 @@ def append_turn(user_input, reply, status, model, prompt_tokens, completion_toke
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "cost_usd": round(cost_usd, 6) if cost_usd is not None else None,
+        "user": user,
+        "session_id": session_id,
+        "run_id": run_id,
+        "latency_seconds": latency_seconds,
+        "input_mode": input_mode,
+        "kind": kind,
     }
 
     with open(TRANSCRIPT_PATH, "a", encoding="utf-8") as f:

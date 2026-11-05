@@ -660,6 +660,28 @@
     color: var(--text-dim);
   }
 
+  .msg-feedback {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+  }
+
+  .msg-feedback button {
+    background: none;
+    border: 1px solid #3a3f4b;
+    border-radius: 6px;
+    color: var(--text-dim);
+    font-size: 13px;
+    padding: 2px 8px;
+    opacity: 0.7;
+  }
+
+  .msg-feedback button.chosen {
+    opacity: 1;
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
   .msg-image {
     display: block;
     max-width: 100%;
@@ -886,6 +908,7 @@
   <header>
     <h1>Shop Inventory</h1>
     <div class="header-actions">
+      <button id="admin-btn" class="hidden" title="Admin dashboard">Admin</button>
       <button id="inventory-btn" title="View full inventory table">📊</button>
       <button id="mute-btn" title="Toggle spoken replies">🔊</button>
       <button id="clear-btn">Clear chat</button>
@@ -1092,7 +1115,24 @@
     chatEl.classList.remove("hidden");
     signoutBtn.classList.remove("hidden");
     textInput.focus();
+    showAdminLinkIfAdmin();
   }
+
+  // The server only says "admin": true to a signed-in admin, so the
+  // button simply stays hidden for everyone else (and the page behind it
+  // refuses them anyway -- this is convenience, not the access check).
+  async function showAdminLinkIfAdmin() {
+    try {
+      const me = await (await fetch("/auth/me")).json();
+      if (me.admin) document.getElementById("admin-btn").classList.remove("hidden");
+    } catch (e) {
+      // No admin button; nothing else depends on it.
+    }
+  }
+
+  document.getElementById("admin-btn").addEventListener("click", function () {
+    location.href = "/admin";
+  });
 
   // Shows Google's button when the server has Google sign-in configured,
   // otherwise the plain access-token form.
@@ -1531,6 +1571,7 @@
     recognizer.onresult = function (event) {
       const transcript = event.results[0][0].transcript;
       textInput.value = transcript;
+      nextMessageIsVoice = true;
       sendMessage();
     };
 
@@ -1576,10 +1617,42 @@
     return response.json();
   }
 
+  // Set by the mic button just before it sends, so the server can tell
+  // spoken messages from typed ones (admin dashboard, voice vs typed).
+  let nextMessageIsVoice = false;
+
+  // Thumbs up/down under a reply. Fire-and-forget: a failed vote is not
+  // worth interrupting the owner for, so errors are swallowed.
+  function addFeedbackButtons(el, runId) {
+    const row = document.createElement("div");
+    row.className = "msg-feedback";
+
+    [["up", "👍", "Good answer"], ["down", "👎", "Wrong or unhelpful"]].forEach(function (spec) {
+      const button = document.createElement("button");
+      button.textContent = spec[1];
+      button.title = spec[2];
+      button.addEventListener("click", function () {
+        row.querySelectorAll("button").forEach(function (b) { b.classList.remove("chosen"); });
+        button.classList.add("chosen");
+        callApi("/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ run_id: runId, rating: spec[0] }),
+        }).catch(function () {});
+      });
+      row.appendChild(button);
+    });
+
+    el.appendChild(row);
+  }
+
   async function sendMessage() {
     const text = textInput.value.trim();
 
     if (!text) return;
+
+    const inputMode = nextMessageIsVoice ? "voice" : "text";
+    nextMessageIsVoice = false;
 
     textInput.value = "";
     sendBtn.disabled = true;
@@ -1591,12 +1664,14 @@
       const data = await callApi("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, input_mode: inputMode }),
       });
 
       setMessageBody(pending, data.reply || "(no reply)");
       pending.className = "msg assistant";
       speak(data.reply);
+
+      if (data.run_id) addFeedbackButtons(pending, data.run_id);
 
       if (data.items && data.items.length > 0) {
         renderChatItemsTable(pending, data.items);

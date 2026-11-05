@@ -15,7 +15,13 @@ happen client-side and never show up here.
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+# Run as a script, sys.path[0] is scripts/, not the project root.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from agent.trace_timing import stage_durations  # noqa: E402
 
 # The server writes logs/ under its working directory, so read from the
 # same place rather than relative to this script.
@@ -28,12 +34,7 @@ def summarize(path):
     print(f"  status={trace['status']}  total={trace['duration_seconds']}s  "
           f"tokens={trace['total_prompt_tokens']} in / {trace['total_completion_tokens']} out")
 
-    previous = 0.0
-
-    for event in trace["events"]:
-        gap = event["elapsed_seconds"] - previous
-        previous = event["elapsed_seconds"]
-
+    for event, gap in stage_durations(trace["events"]):
         if event["type"] == "llm_call":
             calls = [c["name"] for c in event.get("tool_calls", [])]
             detail = (

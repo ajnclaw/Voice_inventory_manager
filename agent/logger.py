@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 
 from .config import PROJECT_ROOT
 from .pricing import estimate_cost
-from . import usage_tracker
+from .trace_timing import stage_gap
+from . import monitoring, usage_tracker
 
 
 LOG_DIR = PROJECT_ROOT / "logs"
@@ -65,9 +66,18 @@ class RunLogger:
     string instead of serializing a task list.
     """
 
-    def __init__(self, user_input):
+    def __init__(self, user_input, user=None, session_id=None, endpoint=None):
         self.run_id = _new_run_id()
         self.started_at = time.time()
+
+        # Who this run is for and which door it came in through ("chat",
+        # "upload", "table_set_price", ...). Stamped on the trace and on
+        # every LLM-call and tool-call row it writes, so cost, errors and
+        # latency can all be rolled up per user in the admin dashboard.
+        self.user = user
+        self.session_id = session_id
+        self.endpoint = endpoint
+        self._last_elapsed = 0.0
 
         self.logger = logging.getLogger(f"agent.{self.run_id}")
         self.logger.setLevel(logging.INFO)
@@ -84,6 +94,9 @@ class RunLogger:
 
         self.trace = {
             "run_id": self.run_id,
+            "user_email": user,
+            "session_id": session_id,
+            "endpoint": endpoint,
             "user_input": user_input,
             "events": [],
             "status": None,
@@ -93,13 +106,27 @@ class RunLogger:
             "total_cost_usd": 0.0,
         }
 
+    def _stage_seconds(self):
+        """
+        Elapsed time and how long this stage took: the gap since the
+        previous event finished (the rule in trace_timing.py, which
+        scripts/trace_summary.py applies to the saved trace).
+        """
+        elapsed = round(time.time() - self.started_at, 3)
+        duration = stage_gap(elapsed, self._last_elapsed)
+        self._last_elapsed = elapsed
+
+        return elapsed, duration
+
     def log_event(self, event_type, message, level="info", **fields):
         log_fn = getattr(self.logger, level, self.logger.info)
         log_fn(message)
 
+        elapsed, _ = self._stage_seconds()
+
         self.trace["events"].append({
             "type": event_type,
-            "elapsed_seconds": round(time.time() - self.started_at, 3),
+            "elapsed_seconds": elapsed,
             "message": message,
             **fields,
         })
@@ -110,9 +137,11 @@ class RunLogger:
             tool_name, arguments, result.get("success"),
         )
 
+        elapsed, duration = self._stage_seconds()
+
         self.trace["events"].append({
             "type": "tool_call",
-            "elapsed_seconds": round(time.time() - self.started_at, 3),
+            "elapsed_seconds": elapsed,
             "tool_name": tool_name,
             "arguments": arguments,
             "success": result.get("success"),
@@ -120,6 +149,28 @@ class RunLogger:
             "error": result.get("error"),
             "denied": result.get("denied", False),
         })
+
+        output = result.get("output")
+        args = arguments if isinstance(arguments, dict) else {}
+
+        # Analytics must never be able to fail the request it describes.
+        try:
+            monitoring.record_tool_call(
+                tool_name,
+                bool(result.get("success")),
+                run_id=self.run_id,
+                user_email=self.user,
+                session_id=self.session_id,
+                endpoint=self.endpoint,
+                denied=bool(result.get("denied")),
+                error=result.get("error"),
+                duration_seconds=duration,
+                item=args.get("item") or args.get("name") or args.get("query"),
+                arguments=args,
+                result_count=len(output) if isinstance(output, list) else None,
+            )
+        except Exception:
+            self.logger.warning("Couldn't record tool call for monitoring", exc_info=True)
 
     def log_llm_call(self, component, model, response, request_messages=None):
         message = response.message
@@ -153,9 +204,11 @@ class RunLogger:
             cost_text,
         )
 
+        elapsed, duration = self._stage_seconds()
+
         self.trace["events"].append({
             "type": "llm_call",
-            "elapsed_seconds": round(time.time() - self.started_at, 3),
+            "elapsed_seconds": elapsed,
             "component": component,
             "model": model,
             "request_messages": _sanitize_for_log(request_messages),
@@ -174,7 +227,10 @@ class RunLogger:
         # have we spent, ever" survives across runs and restarts -- see
         # usage_tracker.py.
         usage_tracker.record_call(
-            self.run_id, component, model, prompt_tokens, completion_tokens, cost_usd
+            self.run_id, component, model, prompt_tokens, completion_tokens, cost_usd,
+            user_email=self.user,
+            session_id=self.session_id,
+            duration_seconds=duration,
         )
 
     def finalize(self, status):

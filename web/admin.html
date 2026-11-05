@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Shop Admin</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f9f9f7;
+    --surface: #fcfcfb;
+    --text: #0b0b0b;
+    --text-2: #52514e;
+    --muted: #6f6d67;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --s1: #2a78d6;
+    --s2: #eb6834;
+    --s3: #1baf7a;
+    --good: #006300;
+    --warn: #8a5a00;
+    --warn-bg: rgba(250, 178, 25, 0.16);
+    --bad: #b02a2a;
+    --bad-bg: rgba(208, 59, 59, 0.10);
+    --link: #1c5cab;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --bg: #0d0d0d;
+      --surface: #1a1a19;
+      --text: #f0efec;
+      --text-2: #c3c2b7;
+      --muted: #a09e97;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --s1: #3987e5;
+      --s2: #d95926;
+      --s3: #199e70;
+      --good: #0ca30c;
+      --warn: #fab219;
+      --warn-bg: rgba(250, 178, 25, 0.14);
+      --bad: #ec8a8a;
+      --bad-bg: rgba(208, 59, 59, 0.18);
+      --link: #6da7ec;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0d0d0d;
+    --surface: #1a1a19;
+    --text: #f0efec;
+    --text-2: #c3c2b7;
+    --muted: #a09e97;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --s1: #3987e5;
+    --s2: #d95926;
+    --s3: #199e70;
+    --good: #0ca30c;
+    --warn: #fab219;
+    --warn-bg: rgba(250, 178, 25, 0.14);
+    --bad: #ec8a8a;
+    --bad-bg: rgba(208, 59, 59, 0.18);
+    --link: #6da7ec;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  a { color: var(--link); }
+  button, select {
+    font: inherit; color: var(--text); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; min-height: 36px;
+  }
+  button { cursor: pointer; }
+  button:focus-visible, select:focus-visible, a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--s1); outline-offset: 2px;
+  }
+
+  .topbar {
+    position: sticky; top: 0; z-index: 5;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+  }
+  .topbar-row {
+    max-width: 1200px; margin: 0 auto; padding: 10px 16px;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .topbar h1 { font-size: 16px; margin: 0; font-weight: 600; margin-right: auto; }
+  .nav {
+    max-width: 1200px; margin: 0 auto; padding: 0 16px 8px;
+    display: flex; gap: 6px; overflow-x: auto;
+  }
+  .nav a {
+    white-space: nowrap; text-decoration: none; color: var(--text-2);
+    border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; font-size: 13px;
+  }
+  .nav a:hover { color: var(--text); }
+
+  main { max-width: 1200px; margin: 0 auto; padding: 16px; }
+
+  section { margin-bottom: 28px; scroll-margin-top: 110px; }
+  section > h2 { font-size: 17px; margin: 0 0 2px; font-weight: 600; }
+  .lede { color: var(--muted); margin: 0 0 12px; font-size: 13px; }
+
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px; min-width: 0;
+  }
+  .card h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
+  .card .sub { color: var(--muted); font-size: 12px; margin: -4px 0 8px; }
+
+  .kpis { display: grid; gap: 10px; grid-template-columns: repeat(2, 1fr); margin-bottom: 10px; }
+  @media (min-width: 700px) { .kpis { grid-template-columns: repeat(4, 1fr); } }
+  .kpi {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px;
+    min-width: 0;
+  }
+  .kpi .label { color: var(--text-2); font-size: 12px; }
+  .kpi .value { font-size: 24px; font-weight: 600; line-height: 1.2; margin: 2px 0; overflow-wrap: anywhere; }
+  .kpi .note { color: var(--muted); font-size: 12px; }
+  .group-label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 14px 0 6px; }
+
+  .banner {
+    border-radius: 10px; padding: 10px 12px; margin: 0 0 12px; font-size: 13px;
+    background: var(--warn-bg); border: 1px solid var(--border);
+  }
+
+  .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  th { color: var(--text-2); font-weight: 500; font-size: 12px; white-space: nowrap; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.click { cursor: pointer; }
+  tr.click:hover td { background: var(--grid); }
+  td.wrap { max-width: 320px; overflow-wrap: anywhere; }
+
+  /* Bar charts: flex columns, so they stay responsive without SVG text. */
+  .cols { display: flex; align-items: flex-end; gap: 2px; height: 130px; border-bottom: 1px solid var(--axis); }
+  .col { flex: 1 1 0; min-width: 1px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; }
+  .col .seg { width: 100%; min-height: 0; }
+  .col .seg:first-child { border-radius: 3px 3px 0 0; }
+  .col .seg + .seg { margin-top: 2px; }
+  .col:hover { background: var(--grid); }
+  .axis-row { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-top: 3px; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text-2); margin-top: 8px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+
+  .hbars { display: grid; gap: 6px; }
+  .hrow { display: grid; grid-template-columns: minmax(70px, 38%) 1fr auto; gap: 8px; align-items: center; font-size: 13px; }
+  .hrow .name { overflow-wrap: anywhere; color: var(--text-2); }
+  .hrow .track { height: 8px; background: var(--grid); border-radius: 4px; overflow: hidden; }
+  .hrow .fill { height: 100%; border-radius: 0 4px 4px 0; background: var(--s1); }
+  .hrow .val { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+
+  .split { display: flex; gap: 2px; height: 14px; }
+  .split span { display: block; height: 100%; }
+  .split span:first-child { border-radius: 4px 0 0 4px; }
+  .split span:last-child { border-radius: 0 4px 4px 0; }
+
+  .chip {
+    display: inline-block; font-size: 12px; line-height: 1.2; padding: 2px 8px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--text-2); margin: 0 4px 4px 0; white-space: nowrap;
+  }
+  .chip.bad { color: var(--bad); background: var(--bad-bg); }
+  .chip.warn { color: var(--warn); background: var(--warn-bg); }
+  .chip.ok { color: var(--good); }
+
+  .turn { border: 1px solid var(--border); border-left-width: 4px; border-radius: 10px; padding: 10px; margin: 8px 0; background: var(--surface); }
+  .turn.problem { border-left-color: var(--bad); }
+  .turn.mild { border-left-color: var(--warn); }
+  .turn .meta { color: var(--muted); font-size: 12px; margin-bottom: 6px; display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: center; }
+  .bubble { padding: 8px 10px; border-radius: 10px; margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .bubble.user { background: var(--grid); }
+  .bubble.bot { border: 1px solid var(--border); }
+  .turn .foot { color: var(--text-2); font-size: 12px; margin-top: 6px; }
+  .turn .foot span { margin-right: 12px; display: inline-block; }
+
+  details.session { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); margin: 10px 0; }
+  details.session > summary { cursor: pointer; padding: 10px 12px; list-style: none; }
+  details.session > summary::-webkit-details-marker { display: none; }
+  details.session > summary .when { font-weight: 600; }
+  details.session > .body { padding: 0 12px 10px; }
+
+  .linkbtn { background: none; border: none; color: var(--link); padding: 0; min-height: 0; text-decoration: underline; cursor: pointer; }
+  .muted { color: var(--muted); }
+  .empty { color: var(--muted); padding: 8px 0; font-size: 13px; }
+  .back { margin-bottom: 8px; }
+
+  #tip {
+    position: fixed; z-index: 20; pointer-events: none; display: none; max-width: 240px;
+    background: var(--text); color: var(--bg); padding: 5px 9px; border-radius: 6px; font-size: 12px;
+  }
+
+  dialog { width: min(760px, calc(100vw - 24px)); max-height: 86vh; border: 1px solid var(--border); border-radius: 12px; padding: 0; background: var(--surface); color: var(--text); }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
+  dialog .dlg-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); }
+  dialog .dlg-body { padding: 10px 14px 14px; overflow-wrap: anywhere; }
+  .step { border-bottom: 1px solid var(--grid); padding: 6px 0; font-size: 13px; }
+  .step pre { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; color: var(--text-2); }
+
+  @media (max-width: 480px) {
+    .kpi .value { font-size: 21px; }
+    .hrow { grid-template-columns: minmax(60px, 34%) 1fr auto; }
+  }
+  @media print { .topbar { position: static; } details.session { break-inside: avoid; } }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-row">
+    <h1 id="title">Shop Admin</h1>
+    <label class="muted" for="range">Period</label>
+    <select id="range" aria-label="Time period">
+      <option value="1">Last 24 hours</option>
+      <option value="7">Last 7 days</option>
+      <option value="30" selected>Last 30 days</option>
+      <option value="90">Last 90 days</option>
+      <option value="365">Last year</option>
+      <option value="0">All time</option>
+    </select>
+    <button id="refresh" type="button">Refresh</button>
+    <a href="/">Back to app</a>
+  </div>
+  <nav class="nav" id="nav" aria-label="Sections"></nav>
+</header>
+
+<main id="main"><p class="empty">Loading…</p></main>
+
+<div id="tip" role="tooltip"></div>
+<dialog id="trace"><div class="dlg-head"><strong id="trace-title">Run trace</strong><button type="button" id="trace-close">Close</button></div><div class="dlg-body" id="trace-body"></div></dialog>
+
+<script>
+(function () {
+  "use strict";
+
+  // Everything dynamic is inserted with textContent (never innerHTML): user
+  // messages, replies, item names and error text all come from outside.
+  const main = document.getElementById("main");
+  const nav = document.getElementById("nav");
+  const rangeEl = document.getElementById("range");
+  const tipEl = document.getElementById("tip");
+  const traceDlg = document.getElementById("trace");
+
+  let tz = "Asia/Kolkata";
+  let days = 30;
+
+  try { days = parseInt(localStorage.getItem("admin_days") || "30", 10); } catch (e) { /* keep default */ }
+  if (![0, 1, 7, 30, 90, 365].includes(days)) days = 30;
+  rangeEl.value = String(days);
+
+  // ---------- tiny DOM helper ----------
+  function h(tag, props) {
+    const node = document.createElement(tag);
+    const kids = Array.prototype.slice.call(arguments, 2);
+    if (props) {
+      Object.keys(props).forEach(function (k) {
+        const v = props[k];
+        if (v === null || v === undefined || v === false) return;
+        if (k === "class") node.className = v;
+        else if (k === "text") node.textContent = v;
+        else if (k === "style") node.style.cssText = v;
+        else if (k.slice(0, 2) === "on") node.addEventListener(k.slice(2), v);
+        else node.setAttribute(k, v === true ? "" : v);
+      });
+    }
+    kids.flat(Infinity).forEach(function (c) {
+      if (c === null || c === undefined || c === false) return;
+      node.appendChild(typeof c === "string" || typeof c === "number" ? document.createTextNode(String(c)) : c);
+    });
+    return node;
+  }
+
+  // ---------- formatting ----------
+  const NO = "–";
+  function num(v) { return v === null || v === undefined ? NO : Number(v).toLocaleString("en-IN"); }
+  function pct(v, digits) {
+    if (v === null || v === undefined) return NO;
+    const p = v * 100;
+    return (p >= 10 || p === 0 ? p.toFixed(0) : p.toFixed(digits === undefined ? 1 : digits)) + "%";
+  }
+  function usd(v) {
+    if (v === null || v === undefined) return NO;
+    const a = Math.abs(v);
+    if (a === 0) return "$0";
+    if (a >= 100) return "$" + v.toFixed(0);
+    if (a >= 1) return "$" + v.toFixed(2);
+    if (a >= 0.01) return "$" + v.toFixed(3);
+    return "$" + v.toFixed(4);
+  }
+  function secs(v) { return v === null || v === undefined ? NO : (v < 10 ? v.toFixed(1) : v.toFixed(0)) + "s"; }
+  function dt(iso) {
+    if (!iso) return NO;
+    try {
+      return new Date(iso).toLocaleString("en-IN", { timeZone: tz, day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+    } catch (e) { return iso; }
+  }
+  function dayLabel(ymd) {
+    const p = ymd.split("-");
+    return new Date(Date.UTC(+p[0], +p[1] - 1, +p[2])).toLocaleDateString("en-IN", { timeZone: "UTC", day: "numeric", month: "short" });
+  }
+  const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+  // ---------- tooltip ----------
+  function attachTip(node, text) {
+    node.setAttribute("aria-label", text);
+    node.addEventListener("mouseenter", function (e) { showTip(text, e); });
+    node.addEventListener("mousemove", function (e) { showTip(text, e); });
+    node.addEventListener("mouseleave", hideTip);
+    node.addEventListener("touchstart", function (e) { showTip(text, e.touches[0]); }, { passive: true });
+  }
+  function showTip(text, e) {
+    tipEl.textContent = text;
+    tipEl.style.display = "block";
+    const w = tipEl.offsetWidth;
+    tipEl.style.left = Math.max(6, Math.min(window.innerWidth - w - 6, e.clientX + 12)) + "px";
+    tipEl.style.top = Math.max(6, e.clientY - 34) + "px";
+  }
+  function hideTip() { tipEl.style.display = "none"; }
+  document.addEventListener("touchstart", function (e) { if (!e.target.closest(".col")) hideTip(); }, { passive: true });
+
+  // ---------- chart / list components ----------
+  /**
+   * Column chart. series: [{key, label, color}]; points: [{label, values:{key:n}, tip}].
+   * One series draws plain bars; several stack with a 2px gap between segments.
+   */
+  function columns(points, series, opts) {
+    opts = opts || {};
+    const totals = points.map(function (p) { return series.reduce(function (a, s) { return a + (p.values[s.key] || 0); }, 0); });
+    const max = Math.max.apply(null, totals.concat([0]));
+    const cols = h("div", { class: "cols", role: "img", "aria-label": opts.aria || "chart" });
+
+    points.forEach(function (p, i) {
+      const col = h("div", { class: "col" });
+      series.forEach(function (s) {
+        const v = p.values[s.key] || 0;
+        if (v > 0 && max > 0) {
+          col.appendChild(h("div", { class: "seg", style: "height:" + Math.max(2, (v / max) * 100) + "%;background:" + s.color }));
+        }
+      });
+      attachTip(col, p.tip || (p.label + ": " + (opts.fmt || num)(totals[i])));
+      cols.appendChild(col);
+    });
+
+    return h("div", null,
+      cols,
+      h("div", { class: "axis-row" },
+        h("span", null, points.length ? points[0].label : ""),
+        h("span", null, max > 0 ? "peak " + (opts.fmt || num)(max) : "no data in this period"),
+        h("span", null, points.length ? points[points.length - 1].label : "")),
+      series.length > 1 ? legend(series) : null);
+  }
+
+  function legend(series) {
+    return h("div", { class: "legend" }, series.map(function (s) {
+      return h("span", null, h("i", { style: "background:" + s.color }), s.label);
+    }));
+  }
+
+  function hbars(rows, fmt, color) {
+    if (!rows.length) return h("div", { class: "empty" }, "Nothing recorded in this period.");
+    const max = Math.max.apply(null, rows.map(function (r) { return r.value; }).concat([0]));
+    return h("div", { class: "hbars" }, rows.map(function (r) {
+      return h("div", { class: "hrow" },
+        h("span", { class: "name" }, r.name),
+        h("span", { class: "track" }, h("span", { class: "fill", style: "display:block;width:" + (max ? Math.max(2, (r.value / max) * 100) : 0) + "%" + (color ? ";background:" + color : "") })),
+        h("span", { class: "val" }, (fmt || num)(r.value)));
+    }));
+  }
+
+  function table(cols, rows, opts) {
+    opts = opts || {};
+    if (!rows.length) return h("div", { class: "empty" }, opts.empty || "Nothing recorded in this period.");
+    return h("div", { class: "scroll" }, h("table", null,
+      h("thead", null, h("tr", null, cols.map(function (c) { return h("th", { class: c.num ? "num" : "" }, c.label); }))),
+      h("tbody", null, rows.map(function (r) {
+        const tr = h("tr", { class: opts.onRow ? "click" : "" }, cols.map(function (c) {
+          const v = c.render ? c.render(r) : r[c.key];
+          return h("td", { class: (c.num ? "num " : "") + (c.wrap ? "wrap" : "") }, v === undefined || v === null ? NO : v);
+        }));
+        if (opts.onRow) tr.addEventListener("click", function () { opts.onRow(r); });
+        return tr;
+      }))));
+  }
+
+  function kpi(label, value, note) {
+    return h("div", { class: "kpi" }, h("div", { class: "label" }, label), h("div", { class: "value" }, value), h("div", { class: "note" }, note || " "));
+  }
+  function card(title, sub) {
+    const kids = Array.prototype.slice.call(arguments, 2);
+    return h("div", { class: "card" }, h("h3", null, title), sub ? h("div", { class: "sub" }, sub) : null, kids);
+  }
+  function section(id, title, lede) {
+    const kids = Array.prototype.slice.call(arguments, 3);
+    return h("section", { id: id }, h("h2", null, title), lede ? h("p", { class: "lede" }, lede) : null, kids);
+  }
+  function notice(text) { return h("div", { class: "banner" }, "⚠ " + text); }
+
+  function flagChip(flag) {
+    const severe = ["failed", "thumbs_down", "tool_error", "corrected"].indexOf(flag.key) >= 0;
+    return h("span", { class: "chip " + (severe ? "bad" : "warn") }, (severe ? "✕ " : "▲ ") + flag.label);
+  }
+
+  // ---------- API ----------
+  async function api(path) {
+    const response = await fetch(path, { credentials: "same-origin", headers: { "Accept": "application/json" } });
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(response.status === 401 ? "Your session expired. Open the app and sign in again." : "This account doesn't have admin access.");
+    }
+    if (!response.ok) throw new Error("Request failed (" + response.status + ")");
+    return response.json();
+  }
+
+  async function showTrace(runId) {
+    const body = document.getElementById("trace-body");
+    body.replaceChildren(h("p", { class: "empty" }, "Loading…"));
+    document.getElementById("trace-title").textContent = "Run " + runId;
+    traceDlg.showModal();
+    try {
+      const t = await api("/admin/api/turn?run_id=" + encodeURIComponent(runId));
+      body.replaceChildren.apply(body, [
+        h("p", null, "Status ", h("strong", null, t.status || NO), " · ", secs(t.duration_seconds), " · ", num((t.prompt_tokens || 0)), " in / ", num(t.completion_tokens || 0), " out · ", usd(t.cost_usd)),
+        h("p", { class: "muted" }, "Endpoint: ", t.endpoint || NO, " · User: ", t.user_email || "(unattributed)"),
+        h("p", null, h("strong", null, "Input: "), t.user_input)
+      ].concat(t.steps.map(function (s) {
+          if (s.type === "llm_call") {
+            return h("div", { class: "step" }, h("strong", null, "LLM · " + s.component), " " + s.model + " · " + secs(s.seconds) + " · " + num(s.prompt_tokens) + " in / " + num(s.completion_tokens) + " out · " + usd(s.cost_usd),
+              s.tool_calls && s.tool_calls.length ? h("pre", null, "→ " + s.tool_calls.map(function (c) { return c.name + "(" + JSON.stringify(c.arguments) + ")"; }).join("\n→ ")) : null,
+              s.content ? h("pre", null, s.content) : null);
+          }
+          if (s.type === "tool_call") {
+            return h("div", { class: "step" }, h("strong", null, "Tool · " + s.tool), " " + (s.success ? "✓ ok" : "✕ failed") + " · " + secs(s.seconds),
+              h("pre", null, JSON.stringify(s.arguments) + (s.error ? "\nerror: " + s.error : "\n" + (s.output || ""))));
+          }
+          return h("div", { class: "step" }, h("strong", null, s.type), " · " + secs(s.seconds), s.message ? h("pre", null, s.message) : null);
+        })));
+    } catch (e) {
+      body.replaceChildren(h("p", { class: "empty" }, e.message === "Request failed (404)" ? "No saved trace for this run (logs/ may have been cleared)." : e.message));
+    }
+  }
+  document.getElementById("trace-close").addEventListener("click", function () { traceDlg.close(); });
+  traceDlg.addEventListener("click", function (e) { if (e.target === traceDlg) traceDlg.close(); });
+
+  // ---------- shared pieces ----------
+  function turnCard(t, showUser) {
+    const problem = t.flags.some(function (f) { return ["failed", "thumbs_down", "tool_error", "corrected"].indexOf(f.key) >= 0; });
+    const mild = !problem && t.flags.length > 0;
+    return h("div", { class: "turn " + (problem ? "problem" : mild ? "mild" : "") },
+      h("div", { class: "meta" },
+        h("span", null, dt(t.ts)),
+        showUser ? h("span", null, t.user_label) : null,
+        t.kind === "upload" ? h("span", { class: "chip" }, "upload") : null,
+        t.status === "failed" ? h("span", { class: "chip bad" }, "✕ failed") : h("span", null, t.status || NO),
+        t.rating === 1 ? h("span", { class: "chip ok" }, "👍") : null,
+        t.rating === -1 ? h("span", { class: "chip bad" }, "👎") : null),
+      t.flags.length ? h("div", null, t.flags.map(flagChip), t.corrected_reason ? h("span", { class: "muted" }, "(" + t.corrected_reason + ")") : null) : null,
+      h("div", { class: "bubble user" }, t.input || "(empty)"),
+      h("div", { class: "bubble bot" }, t.reply || "(no reply)"),
+      h("div", { class: "foot" },
+        h("span", null, "tokens " + num(t.prompt_tokens) + " in / " + num(t.completion_tokens) + " out"),
+        h("span", null, "cost " + usd(t.cost_usd)),
+        h("span", null, "latency " + secs(t.latency)),
+        t.input_mode ? h("span", null, t.input_mode === "voice" ? "🎤 voice" : "⌨ typed") : null,
+        t.run_id ? h("button", { class: "linkbtn", type: "button", onclick: function () { showTrace(t.run_id); } }, "trace") : null),
+      t.tools && t.tools.length ? h("div", { class: "foot" }, t.tools.map(function (x) {
+        return h("span", { class: "chip " + (x.ok ? "" : "bad"), title: x.error || "" },
+          (x.ok ? "✓ " : "✕ ") + x.name + (x.item ? " · " + x.item : "") + (x.ok && x.results === 0 ? " (0 results)" : "") + (x.endpoint && x.endpoint.indexOf("table_") === 0 ? " [table]" : ""));
+      })) : (t.tool_names && t.tool_names.length ? h("div", { class: "foot" }, t.tool_names.map(function (n) { return h("span", { class: "chip" }, n); })) : null));
+  }
+
+  function costBars(cost) {
+    return columns(cost.by_day.map(function (d) {
+      return { label: dayLabel(d.date), values: { c: d.cost_usd }, tip: dayLabel(d.date) + ": " + usd(d.cost_usd) + " · " + num(d.calls) + " calls · " + num(d.turns) + " turns" };
+    }), [{ key: "c", label: "Cost", color: "var(--s1)" }], { fmt: usd, aria: "Cost per day" });
+  }
+
+  function tokenSplit(cost) {
+    const total = cost.prompt_tokens + cost.completion_tokens;
+    if (!total) return h("div", { class: "empty" }, "No tokens recorded.");
+    return h("div", null,
+      h("div", { class: "split", role: "img", "aria-label": "Tokens in versus out" },
+        h("span", { style: "background:var(--s1);width:" + (cost.prompt_tokens / total * 100) + "%" }),
+        h("span", { style: "background:var(--s2);width:" + (cost.completion_tokens / total * 100) + "%" })),
+      h("div", { class: "legend" },
+        h("span", null, h("i", { style: "background:var(--s1)" }), "In (prompt): " + num(cost.prompt_tokens)),
+        h("span", null, h("i", { style: "background:var(--s2)" }), "Out (reply): " + num(cost.completion_tokens) + " (" + pct(cost.output_share) + ")")));
+  }
+
+  function qualityDetails(q, opts) {
+    opts = opts || {};
+    const tf = q.tool_failures;
+    return [
+      h("div", { class: "grid" },
+        card("Problems by type", "How many turns carry each flag",
+          hbars(Object.keys(q.flag_counts).map(function (k) { return { name: q.flag_counts[k].label, value: q.flag_counts[k].count }; }).filter(function (r) { return r.value > 0; }), num, "var(--s2)")),
+        card("Tool calls by tool", "Failure rate per tool (" + num(tf.failed) + " of " + num(tf.calls) + " failed)",
+          table([
+            { label: "Tool", key: "tool" },
+            { label: "Calls", key: "calls", num: true, render: function (r) { return num(r.calls); } },
+            { label: "Failed", num: true, render: function (r) { return r.failed ? "✕ " + num(r.failed) + " (" + pct(r.failure_rate) + ")" : "0"; } },
+            { label: "Most common error", wrap: true, render: function (r) { return r.top_error; } }
+          ], tf.by_tool)),
+        card("Searches that found nothing", "The items people ask for that the catalog doesn't have",
+          q.empty_searches.top_queries.length
+            ? hbars(q.empty_searches.top_queries.map(function (r) { return { name: r.query, value: r.count }; }))
+            : h("div", { class: "empty" }, "None — every search returned something.")),
+        card("User corrections", "A fix straight after a reply (heuristic)",
+          Object.keys(q.corrections.reasons).length
+            ? hbars(Object.keys(q.corrections.reasons).map(function (k) { return { name: k, value: q.corrections.reasons[k] }; }))
+            : h("div", { class: "empty" }, "No corrections detected."))),
+      opts.noWorst ? null : h("div", { class: "card", style: "margin-top:12px" },
+        h("h3", null, "Worst turns to review"),
+        h("div", { class: "sub" }, "Scored by severity: failure 5, thumbs-down 4, tool error 3, corrected 3, not-found 2, empty search 2, clarification 1, slow 1."),
+        q.worst_turns.length ? q.worst_turns.map(function (t) { return turnCard(t, true); }) : h("div", { class: "empty" }, "No problem turns in this period."))
+    ];
+  }
+
+  function definitions() {
+    return h("details", { class: "card", style: "margin-top:12px" },
+      h("summary", null, "How these are measured"),
+      h("p", { class: "muted" }, "Failed = the request errored. Tool failures come from every tool call (chat, table edits, imports). “Couldn't find/do” and “asked which one” are keyword matches on the reply (English and Hinglish), and “correction” means the next message within 5 minutes reads like “no, I meant…”, or the same item's stock/price was edited in the table within 10 minutes. They point at turns worth a look; they are not exact counts. Thumbs need the 👍/👎 buttons under replies, so they only cover rated replies."));
+  }
+
+  // ---------- overview page ----------
+  function renderOverview(d) {
+    tz = d.window.timezone || tz;
+    const k = d.headline, q = d.quality, c = d.cost, u = d.usage, s = d.speed, a = d.adoption, hl = d.data_health, sec = d.security;
+    const out = [];
+
+    out.push(h("div", { class: "group-label" }, "1 · Quality and gaps"));
+    out.push(h("div", { class: "kpis" },
+      kpi("Failed requests", pct(k.failure_rate), num(q.failed_turns) + " of " + num(u.turns) + " turns"),
+      kpi("Couldn't find / do", pct(k.not_found_rate), num(q.not_found.count) + " chat replies"),
+      kpi("Tool-call failures", pct(k.tool_failure_rate), num(q.tool_failures.failed) + " of " + num(q.tool_failures.calls)),
+      kpi("Thumbs-up share", pct(k.satisfaction), q.feedback.up + q.feedback.down ? num(q.feedback.up) + " 👍 / " + num(q.feedback.down) + " 👎" : "no ratings yet")));
+    out.push(h("div", { class: "group-label" }, "2 · Cost"));
+    out.push(h("div", { class: "kpis" },
+      kpi("LLM cost", usd(k.total_cost_usd), c.unpriced_calls ? "lower bound — see note" : "this period"),
+      kpi("Projected / month", usd(k.projected_monthly_usd), "from last " + c.projection.basis_days + " days"),
+      kpi("LLM calls", num(k.llm_calls), usd(c.avg_per_turn_usd) + " per chat turn"),
+      kpi("Tokens", num(k.tokens), num(c.prompt_tokens) + " in / " + num(c.completion_tokens) + " out")));
+    out.push(h("div", { class: "group-label" }, "3 · Usage and 4 · Speed"));
+    out.push(h("div", { class: "kpis" },
+      kpi("Users", num(k.active_users), "active of " + num(k.users) + " with access"),
+      kpi("Sessions", num(k.sessions), u.inferred_sessions ? num(u.inferred_sessions) + " inferred (older data)" : "30-min idle limit"),
+      kpi("Conversations (turns)", num(k.turns), u.turns_per_session.avg !== null ? u.turns_per_session.avg + " per session" : ""),
+      kpi("Response time p95", secs(k.p95_latency), "median " + secs(s.chat_latency.p50))));
+
+    // 1. Quality
+    out.push(section("quality", "1 · Quality and gaps", "Where the assistant is failing or being corrected — start here.",
+      qualityDetails(q), definitions()));
+
+    // 2. Cost
+    const costParts = [];
+    if (c.unpriced_calls) {
+      costParts.push(notice(num(c.unpriced_calls) + " of " + num(c.calls) + " LLM calls have no price because their model isn't in agent/pricing.py, so the dollar figures are a lower bound. Token counts are exact."));
+    }
+    costParts.push(h("div", { class: "grid" },
+      card("Cost per day", "Trend last 7 days vs the 7 before: " + (c.trend.change === null ? "not enough data" : (c.trend.change >= 0 ? "+" : "") + pct(c.trend.change, 0)), costBars(c)),
+      card("Tokens in vs out", "Month to date " + usd(c.projection.month_to_date_usd) + " · " + usd(c.avg_per_session_usd) + " per session", tokenSplit(c))));
+    costParts.push(h("div", { class: "grid", style: "margin-top:12px" },
+      card("Cost by user", null, hbars(c.by_user.map(function (r) { return { name: r.label, value: r.cost_usd }; }), usd)),
+      card("Cost by component", "responder = chat, compactor = history summaries, import = file reading", hbars(c.by_component.map(function (r) { return { name: r.label, value: r.cost_usd }; }), usd)),
+      card("Cost by model", null, hbars(c.by_model.map(function (r) { return { name: r.label, value: r.cost_usd }; }), usd))));
+    out.push(section("cost", "2 · Cost", "LLM spend, from the estimated per-token price table.", costParts));
+
+    // 3. Usage
+    const usageActive = columns(u.active_by_day.map(function (x) {
+      return { label: dayLabel(x.date), values: { t: x.turns }, tip: dayLabel(x.date) + ": " + num(x.turns) + " turns · " + num(x.users) + " users · " + num(x.sessions) + " sessions" };
+    }), [{ key: "t", label: "Turns", color: "var(--s1)" }], { aria: "Turns per day" });
+    const usersPerDay = columns(u.active_by_day.map(function (x) {
+      return { label: dayLabel(x.date), values: { n: x.users }, tip: dayLabel(x.date) + ": " + num(x.users) + " active users" };
+    }), [{ key: "n", label: "Users", color: "var(--s3)" }], { aria: "Active users per day" });
+    const hours = columns(u.peak_hours.map(function (x) {
+      return { label: x.hour + ":00", values: { t: x.turns }, tip: x.hour + ":00–" + x.hour + ":59 — " + num(x.turns) + " turns" };
+    }), [{ key: "t", label: "Turns", color: "var(--s1)" }], { aria: "Turns by hour of day" });
+    const weekdays = columns(u.peak_weekdays.map(function (x) {
+      return { label: WEEKDAYS[x.weekday], values: { t: x.turns }, tip: WEEKDAYS[x.weekday] + ": " + num(x.turns) + " turns" };
+    }), [{ key: "t", label: "Turns", color: "var(--s1)" }], { aria: "Turns by weekday" });
+
+    const userTable = table([
+      { label: "User", render: function (r) {
+          return h("a", { href: "#/user/" + encodeURIComponent(r.key) }, r.label, r.is_admin ? " (admin)" : "");
+        } },
+      { label: "Sessions", num: true, render: function (r) { return num(r.sessions); } },
+      { label: "Turns", num: true, render: function (r) { return num(r.turns); } },
+      { label: "Flagged", num: true, render: function (r) { return r.flagged_turns ? num(r.flagged_turns) + " (" + pct(r.flagged_rate, 0) + ")" : "0"; } },
+      { label: "Cost", num: true, render: function (r) { return usd(r.cost_usd); } },
+      { label: "Per turn", num: true, render: function (r) { return usd(r.cost_per_turn_usd); } },
+      { label: "Median speed", num: true, render: function (r) { return secs(r.p50_latency); } },
+      { label: "Last active", render: function (r) { return r.never_active ? "never" : dt(r.last_seen); } }
+    ], d.users, { onRow: function (r) { location.hash = "#/user/" + encodeURIComponent(r.key); } });
+
+    out.push(section("usage", "3 · Usage", "Who uses the assistant, and when. Click a user for their sessions.",
+      h("div", { class: "card" }, h("h3", null, "Users (" + d.users.length + ")"), userTable),
+      h("div", { class: "grid", style: "margin-top:12px" },
+        card("Conversations per day", "Turns", usageActive),
+        card("Active users per day", u.new_users + " new, " + u.returning_users.count + " returning (" + u.returning_users.definition + ")", usersPerDay),
+        card("Peak hours", "Shop time (" + tz + ")", hours),
+        card("Busiest weekdays", null, weekdays),
+        card("Sessions", null,
+          table([
+            { label: "Measure", key: "name" },
+            { label: "Value", num: true, key: "value" }
+          ], [
+            { name: "Sessions overall", value: num(u.sessions) },
+            { name: "…with a conversation", value: num(u.sessions_with_turns) },
+            { name: "Turns per session (median / max)", value: num(u.turns_per_session.median) + " / " + num(u.turns_per_session.max) },
+            { name: "Session length, minutes (median / avg)", value: num(u.session_minutes.median) + " / " + num(u.session_minutes.avg) }
+          ]),
+          u.turns_without_session ? h("p", { class: "muted" }, num(u.turns_without_session) + " older turns have no session id; their sessions are inferred from gaps.") : null),
+        card("Weekly active users", null, table([
+          { label: "Week of", render: function (r) { return dayLabel(r.week_start); } },
+          { label: "Users", num: true, render: function (r) { return num(r.users); } }
+        ], u.active_by_week.slice(-8).reverse())))));
+
+    // 4. Speed
+    out.push(section("speed", "4 · Speed", "Server-side time per request and per stage (speech-to-text and speech playback happen in the browser and aren't included).",
+      s.coverage.turns_with_latency < s.coverage.chat_turns
+        ? notice("Timing exists for " + num(s.coverage.turns_with_latency) + " of " + num(s.coverage.chat_turns) + " chat turns — older turns were recorded before timing was added.") : null,
+      h("div", { class: "grid" },
+        card("Chat request time", null, table([
+          { label: "Median", render: function () { return secs(s.chat_latency.p50); } },
+          { label: "p95", render: function () { return secs(s.chat_latency.p95); } },
+          { label: "Average", render: function () { return secs(s.chat_latency.avg); } },
+          { label: "Slowest", render: function () { return secs(s.chat_latency.max); } },
+          { label: "Requests", render: function () { return num(s.chat_latency.count); } }
+        ], [{}])),
+        card("By LLM stage", "One row per component", table([
+          { label: "Stage", key: "stage" }, { label: "Calls", num: true, render: function (r) { return num(r.count); } },
+          { label: "p50", num: true, render: function (r) { return secs(r.p50); } }, { label: "p95", num: true, render: function (r) { return secs(r.p95); } }
+        ], s.llm_stages)),
+        card("By tool", null, table([
+          { label: "Tool", key: "stage" }, { label: "Calls", num: true, render: function (r) { return num(r.count); } },
+          { label: "p50", num: true, render: function (r) { return secs(r.p50); } }, { label: "p95", num: true, render: function (r) { return secs(r.p95); } }
+        ], s.tool_stages)),
+        card("By request type", null, table([
+          { label: "Endpoint", key: "endpoint" }, { label: "Count", num: true, render: function (r) { return num(r.count); } },
+          { label: "p50", num: true, render: function (r) { return secs(r.p50); } }, { label: "p95", num: true, render: function (r) { return secs(r.p95); } }
+        ], s.by_endpoint))),
+      h("div", { class: "card", style: "margin-top:12px" }, h("h3", null, "Slowest requests"),
+        s.slowest.length ? s.slowest.map(function (t) { return turnCard(t, true); }) : h("div", { class: "empty" }, "No timed requests yet."))));
+
+    // 5. Adoption
+    out.push(section("adoption", "5 · Feature adoption", "Which parts of the app get used, and whether the owner trusts the results.",
+      h("div", { class: "grid" },
+        card("Bulk import", a.imports.uploads + " files read", hbars([
+          { name: "Confirmed", value: a.imports.confirmed }, { name: "Cancelled", value: a.imports.cancelled }, { name: "Read failed", value: a.imports.uploads_failed }
+        ]), h("p", { class: "muted" }, "Cancel rate " + pct(a.imports.reject_rate) + " · " + num(a.imports.items_confirmed) + " items saved")),
+        card("Stock and price edits", "From the table vs by chat", hbars([
+          { name: "Stock — table", value: a.edits.stock_from_table }, { name: "Stock — chat", value: a.edits.stock_from_chat },
+          { name: "Price — table", value: a.edits.price_from_table }, { name: "Price — chat", value: a.edits.price_from_chat },
+          { name: "Sales — chat", value: a.edits.sales_from_chat }, { name: "Restocks — chat", value: a.edits.restocks_from_chat }
+        ])),
+        card("Photos and new items", null, hbars([
+          { name: "Photos uploaded", value: a.photo_uploads.completed }, { name: "Photo uploads failed", value: a.photo_uploads.failed },
+          { name: "New items accepted", value: a.new_items.accepted }, { name: "New items rejected", value: a.new_items.rejected }
+        ])),
+        card("Voice vs typed", "Chat turns", hbars([
+          { name: "Voice", value: a.input_mode.voice }, { name: "Typed", value: a.input_mode.text }, { name: "Unknown (older / API)", value: a.input_mode.unknown }
+        ])),
+        card("Tools used", "How often the assistant calls each", table([
+          { label: "Tool", key: "tool" }, { label: "Calls", num: true, render: function (r) { return num(r.calls); } },
+          { label: "Success", num: true, render: function (r) { return pct(r.success_rate, 0); } }
+        ], a.tools_used)))));
+
+    // 6. Data health
+    if (hl.available) {
+      const miss = hl.missing;
+      const missRows = [["No sale price", miss.sale_price], ["No photo", miss.photo], ["No category", miss.category], ["No cost price", miss.cost_price], ["No reorder level", miss.reorder_threshold]];
+      out.push(section("health", "6 · Data health", hl.items + " items in the catalog · " + pct(hl.complete_pct, 0) + " have a sale price, photo and category.",
+        h("div", { class: "grid" },
+          card("Gaps in the catalog", "Share of items missing each field", hbars(missRows.map(function (m) { return { name: m[0], value: m[1].count }; }), function (v) { return num(v) + " (" + pct(hl.items ? v / hl.items : 0, 0) + ")"; }, "var(--s2)"),
+            h("details", null, h("summary", null, "Show examples"), missRows.map(function (m) {
+              return m[1].count ? h("p", null, h("strong", null, m[0] + ": "), m[1].examples.join(", ") + (m[1].count > m[1].examples.length ? " …" : "")) : null;
+            }))),
+          card("Stock position", num(hl.stock.low) + " low · " + num(hl.stock.out_of_stock) + " out of stock · " + num(hl.stock.negative) + " negative", table([
+            { label: "Low-stock item", key: "name", wrap: true }, { label: "Qty", num: true, render: function (r) { return num(r.quantity); } }, { label: "Reorder at", num: true, render: function (r) { return num(r.threshold); } }
+          ], hl.stock.low_items, { empty: "Nothing at or below its reorder level." })),
+          card("Ledger activity", num(hl.ledger.transactions) + " entries · " + num(hl.ledger.adjustments) + " stock adjustments · " + num(hl.ledger.stale_items_90d) + " items untouched for 90 days",
+            columns(hl.ledger.by_day.map(function (x) {
+              return { label: dayLabel(x.date), values: { sale: x.sale, restock: x.restock, adjustment: x.adjustment }, tip: dayLabel(x.date) + ": " + x.sale + " sales, " + x.restock + " restocks, " + x.adjustment + " adjustments" };
+            }), [{ key: "sale", label: "Sales", color: "var(--s1)" }, { key: "restock", label: "Restocks", color: "var(--s2)" }, { key: "adjustment", label: "Adjustments", color: "var(--s3)" }], { aria: "Ledger entries per day" }),
+            h("p", { class: "muted" }, "Last entry: " + dt(hl.ledger.last_at))))));
+    } else {
+      out.push(section("health", "6 · Data health", null, h("div", { class: "empty" }, "inventory.db isn't readable from here.")));
+    }
+
+    // 7. Security
+    out.push(section("security", "7 · Security", "Failed sign-ins and blocked requests.",
+      h("div", { class: "kpis" },
+        kpi("Auth failures", num(sec.auth_failures), "401: " + num(sec.by_status["401"] || 0) + " · 403: " + num(sec.by_status["403"] || 0)),
+        kpi("Failure share", pct(sec.failure_rate), "of failures + recorded requests"),
+        kpi("Sign-ins", num(sec.sign_ins.ok), num(sec.sign_ins.blocked) + " blocked · " + num(sec.sign_ins.invalid) + " invalid"),
+        kpi("Noisy IPs", num(sec.suspicious_ips.length), "10+ failures")),
+      h("div", { class: "grid" },
+        card("Failures by IP", null, table([
+          { label: "IP", key: "ip" }, { label: "Failures", num: true, render: function (r) { return num(r.count); } }, { label: "Last", render: function (r) { return dt(r.last); } }
+        ], sec.by_ip)),
+        card("Failures by path", null, hbars(sec.by_path.map(function (r) { return { name: r.path, value: r.count }; }), num, "var(--s2)")),
+        card("Blocked sign-in attempts", "Google accounts not on the allowlist", table([
+          { label: "Email", key: "email", wrap: true }, { label: "Times", num: true, render: function (r) { return num(r.blocked); } }, { label: "Last", render: function (r) { return dt(r.last); } }
+        ], sec.blocked_emails, { empty: "None." })),
+        card("Failures per day", null, columns(sec.by_day.map(function (x) {
+          return { label: dayLabel(x.date), values: { n: x.count }, tip: dayLabel(x.date) + ": " + num(x.count) + " failures" };
+        }), [{ key: "n", label: "Failures", color: "var(--s2)" }], { aria: "Auth failures per day" }))),
+      h("div", { class: "card", style: "margin-top:12px" }, h("h3", null, "Most recent failures"), table([
+        { label: "When", render: function (r) { return dt(r.created_at); } }, { label: "Status", key: "status", num: true },
+        { label: "Path", key: "path", wrap: true }, { label: "IP", key: "ip" }, { label: "Email", key: "email", wrap: true }
+      ], sec.recent, { empty: "No failures recorded." }))));
+
+    main.replaceChildren.apply(main, out);
+    setNav([["quality", "Quality"], ["cost", "Cost"], ["usage", "Usage & users"], ["speed", "Speed"], ["adoption", "Adoption"], ["health", "Data health"], ["security", "Security"]]);
+    document.getElementById("title").textContent = "Shop Admin";
+    document.title = "Shop Admin";
+  }
+
+  // ---------- user page ----------
+  function renderUser(d) {
+    tz = d.window.timezone || tz;
+    const u = d.user, t = d.totals, q = d.quality, c = d.cost, a = d.adoption;
+    const out = [];
+
+    out.push(h("div", { class: "back" }, h("a", { href: "#/" }, "← All users")));
+    out.push(h("h2", { style: "margin:0 0 2px" }, u.label, u.is_admin ? " (admin)" : ""));
+    out.push(h("p", { class: "lede" },
+      u.is_shared_token ? "Everyone using the shared access token (phone app, scripts) — it has no individual identity. " : "",
+      u.key === "_unattributed" ? "Activity from before users were recorded. " : "",
+      "First seen " + dt(u.first_seen) + " · last active " + dt(u.last_seen)));
+
+    out.push(h("div", { class: "kpis" },
+      kpi("Conversations (turns)", num(t.turns), num(t.sessions) + " sessions · " + num(t.active_days) + " active days"),
+      kpi("LLM cost", usd(t.cost_usd), usd(t.avg_per_turn_usd) + " per chat turn"),
+      kpi("Tokens", num(t.prompt_tokens + t.completion_tokens), num(t.prompt_tokens) + " in / " + num(t.completion_tokens) + " out"),
+      kpi("Response time", secs(t.latency.p50), "p95 " + secs(t.latency.p95))));
+    out.push(h("div", { class: "kpis" },
+      kpi("Failed requests", pct(q.failure_rate), num(q.failed_turns) + " turns"),
+      kpi("Problem turns", num(t.flagged_turns), "flagged for review"),
+      kpi("Corrected by user", pct(q.corrections.rate), num(q.corrections.count) + " turns"),
+      kpi("Thumbs-up share", pct(q.feedback.satisfaction), num(q.feedback.up) + " 👍 / " + num(q.feedback.down) + " 👎")));
+
+    out.push(section("sessions", "Sessions", d.sessions_total > d.sessions_shown
+      ? "Showing the newest " + d.sessions_shown + " of " + d.sessions_total + " sessions in this period." : num(d.sessions_total) + " in this period, newest first. Problem turns have a coloured edge.",
+      d.sessions.length ? d.sessions.map(function (s, i) {
+        const node = h("details", { class: "session" },
+          h("summary", null,
+            h("span", { class: "when" }, dt(s.started_at)),
+            " · " + s.turn_count + (s.turn_count === 1 ? " turn" : " turns") + " · " + Math.round(s.minutes) + " min · " + usd(s.cost_usd) + " ",
+            s.inferred ? h("span", { class: "chip" }, "inferred") : null,
+            s.failed ? h("span", { class: "chip bad" }, "✕ " + s.failed + " failed") : null,
+            s.flagged ? h("span", { class: "chip warn" }, "▲ " + s.flagged + " flagged") : null),
+          h("div", { class: "body" }, s.turns.length ? s.turns.map(function (x) { return turnCard(x, false); }) : h("div", { class: "empty" }, "Signed in but sent nothing.")));
+        if (i === 0) node.open = true;
+        return node;
+      }) : h("div", { class: "empty" }, "No sessions in this period.")));
+
+    out.push(section("u-quality", "Quality for this user", null, qualityDetails(q, { noWorst: true })));
+
+    out.push(section("u-cost", "Cost for this user", null,
+      h("div", { class: "grid" },
+        card("Cost per day", null, costBars(c)),
+        card("Tokens in vs out", null, tokenSplit(c)),
+        card("By component", null, hbars(c.by_component.map(function (r) { return { name: r.label, value: r.cost_usd }; }), usd)))));
+
+    out.push(section("u-use", "What they use", null,
+      h("div", { class: "grid" },
+        card("Features", null, hbars([
+          { name: "Voice messages", value: a.input_mode.voice }, { name: "Typed messages", value: a.input_mode.text },
+          { name: "Stock edits — table", value: a.edits.stock_from_table }, { name: "Stock edits — chat", value: a.edits.stock_from_chat },
+          { name: "Price edits — table", value: a.edits.price_from_table }, { name: "Price edits — chat", value: a.edits.price_from_chat },
+          { name: "Photos uploaded", value: a.photo_uploads.completed },
+          { name: "Imports confirmed", value: a.imports.confirmed }, { name: "Imports cancelled", value: a.imports.cancelled }
+        ])),
+        card("Tools used", null, table([
+          { label: "Tool", key: "tool" }, { label: "Calls", num: true, render: function (r) { return num(r.calls); } },
+          { label: "Success", num: true, render: function (r) { return pct(r.success_rate, 0); } }
+        ], a.tools_used)),
+        card("Active hours", "Shop time", columns(d.usage.peak_hours.map(function (x) {
+          return { label: x.hour + ":00", values: { t: x.turns }, tip: x.hour + ":00 — " + num(x.turns) + " turns" };
+        }), [{ key: "t", label: "Turns", color: "var(--s1)" }], { aria: "Turns by hour" })))));
+
+    main.replaceChildren.apply(main, out);
+    setNav([["sessions", "Sessions"], ["u-quality", "Quality"], ["u-cost", "Cost"], ["u-use", "Usage"]]);
+    document.getElementById("title").textContent = u.label;
+    document.title = u.label + " · Shop Admin";
+  }
+
+  function setNav(items) {
+    nav.replaceChildren.apply(nav, items.map(function (i) {
+      return h("a", { href: "#", onclick: function (e) {
+        e.preventDefault();
+        const target = document.getElementById(i[0]);
+        if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+      } }, i[1]);
+    }));
+  }
+
+  // ---------- routing ----------
+  let loadId = 0;
+
+  async function load() {
+    const mine = ++loadId;
+    const match = location.hash.match(/^#\/user\/(.+)$/);
+    main.replaceChildren(h("p", { class: "empty" }, "Loading…"));
+    hideTip();
+
+    try {
+      const data = match
+        ? await api("/admin/api/user?days=" + days + "&email=" + encodeURIComponent(decodeURIComponent(match[1])))
+        : await api("/admin/api/overview?days=" + days);
+      if (mine !== loadId) return;
+      if (match) renderUser(data); else renderOverview(data);
+      window.scrollTo(0, 0);
+    } catch (e) {
+      if (mine !== loadId) return;
+      main.replaceChildren(h("div", { class: "banner" }, "✕ " + e.message));
+    }
+  }
+
+  rangeEl.addEventListener("change", function () {
+    days = parseInt(rangeEl.value, 10);
+    try { localStorage.setItem("admin_days", String(days)); } catch (e) { /* not essential */ }
+    load();
+  });
+  document.getElementById("refresh").addEventListener("click", load);
+  window.addEventListener("hashchange", load);
+  load();
+})();
+</script>
+</body>
+</html>
