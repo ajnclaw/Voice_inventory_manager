@@ -763,6 +763,38 @@
     border-bottom: none;
   }
 
+  .chat-items-table td.editable-cell {
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 3px;
+    text-decoration-color: #4a4f5c;
+  }
+
+  .chat-items-table td.editing {
+    white-space: normal;
+    text-decoration: none;
+  }
+
+  .chat-items-table .inline-edit {
+    min-width: 120px;
+  }
+
+  /* On a phone the long category text pushes Stock/Cost/Sale off-screen,
+     and those are the cells that get tapped. The item name stays. */
+  @media (max-width: 520px) {
+    .chat-items-table th:first-child,
+    .chat-items-table td:first-child {
+      display: none;
+    }
+  }
+
+  .chat-items-hint {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
   .chat-items-table td.num {
     text-align: right;
     font-variant-numeric: tabular-nums;
@@ -1364,23 +1396,58 @@
         appendAuthenticatedImage(imageCell, item.image_url, "inventory-row-image");
       }
 
-      const stockCell = document.createElement("td");
-      stockCell.className = "num";
-      stockCell.textContent =
-        item.current_quantity != null ? formatQuantity(item.current_quantity) : "--";
-      row.appendChild(stockCell);
+      // Same tap-to-edit cells as the full inventory table, saved through
+      // the same endpoints (no LLM involved). After a save only this cell
+      // is updated -- the inventory overlay is not opened.
+      function addEditableCell(className, text, hint, openEditor) {
+        const cell = document.createElement("td");
+        cell.className = "num editable-cell " + className;
+        cell.textContent = text();
+        cell.title = hint;
+        cell.addEventListener("click", function () {
+          if (cell.classList.contains("editing")) return;
 
-      const priceCell = document.createElement("td");
-      priceCell.className = "num";
-      priceCell.textContent =
-        item.cost_price != null ? formatMoney(item.cost_price) : "--";
-      row.appendChild(priceCell);
+          openEditor(cell, function () {
+            cell.classList.remove("editing");
+            cell.textContent = text();
+            activeEditCleanup = null;
+          });
+        });
+        row.appendChild(cell);
+      }
 
-      const salePriceCell = document.createElement("td");
-      salePriceCell.className = "num";
-      salePriceCell.textContent =
-        item.sale_price != null ? formatMoney(item.sale_price) : "--";
-      row.appendChild(salePriceCell);
+      addEditableCell(
+        "stock-cell",
+        function () {
+          return item.current_quantity != null ? formatQuantity(item.current_quantity) : "--";
+        },
+        "Tap to adjust stock",
+        function (cell, onSaved) {
+          openStockEditor(cell, item, onSaved);
+        }
+      );
+
+      addEditableCell(
+        "cost-cell",
+        function () {
+          return item.cost_price != null ? formatMoney(item.cost_price) : "--";
+        },
+        "Tap to change cost price (what you pay the supplier)",
+        function (cell, onSaved) {
+          openPriceEditor(cell, item, "cost_price", onSaved);
+        }
+      );
+
+      addEditableCell(
+        "sale-cell",
+        function () {
+          return item.sale_price != null ? formatMoney(item.sale_price) : "--";
+        },
+        "Tap to set sale price (what the customer pays)",
+        function (cell, onSaved) {
+          openPriceEditor(cell, item, "sale_price", onSaved);
+        }
+      );
 
       tbody.appendChild(row);
     });
@@ -1388,6 +1455,11 @@
     table.appendChild(tbody);
     wrap.appendChild(table);
     body.appendChild(wrap);
+
+    const hint = document.createElement("div");
+    hint.className = "chat-items-hint";
+    hint.textContent = "Tap Stock, Cost or Sale to change it.";
+    body.appendChild(hint);
   }
 
   // Like addMessage, but shows the actual attached image inline (or a
@@ -2797,7 +2869,9 @@
   // editing price is which input(s) are shown and which endpoint/
   // payload gets sent, everything about opening/closing/error-
   // handling is identical.
-  function buildInlineEditButtons(cell, originalText, onSave) {
+  // `onSaved` runs after a successful save instead of reopening the full
+  // inventory view (the chat table passes its own, to update just one cell).
+  function buildInlineEditButtons(cell, originalText, onSave, onSaved) {
     const errorEl = document.createElement("div");
     errorEl.className = "inline-edit-error hidden";
 
@@ -2832,7 +2906,11 @@
       // simplicity of always ending up with exactly-correct totals,
       // low-stock flags, etc. is worth more than avoiding one extra
       // GET /inventory.
-      await openInventoryView();
+      if (onSaved) {
+        onSaved();
+      } else {
+        await openInventoryView();
+      }
     });
 
     const btnRow = document.createElement("div");
@@ -2843,7 +2921,7 @@
     return { btnRow: btnRow, errorEl: errorEl, saveBtn: saveBtn, cancelBtn: cancelBtn, cleanup: cleanup };
   }
 
-  function openStockEditor(cell, item) {
+  function openStockEditor(cell, item, onSaved) {
     if (activeEditCleanup) activeEditCleanup();
 
     const originalText = cell.textContent;
@@ -2887,13 +2965,14 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ item: item.name, new_quantity: newQuantity, reason: reason }),
         });
+        item.current_quantity = newQuantity;
         return null;
       } catch (err) {
         controls.saveBtn.disabled = false;
         controls.cancelBtn.disabled = false;
         return err.message === "unauthorized" ? null : (err.message || "Failed to save.");
       }
-    });
+    }, onSaved);
 
     wrap.appendChild(qtyInput);
     wrap.appendChild(reasonInput);
@@ -2907,7 +2986,7 @@
 
   // `field` is "cost_price" (what the shop pays; what imports record) or
   // "sale_price" (what a customer pays; entered per product here).
-  function openPriceEditor(cell, item, field) {
+  function openPriceEditor(cell, item, field, onSaved) {
     if (activeEditCleanup) activeEditCleanup();
 
     const originalText = cell.textContent;
@@ -2941,13 +3020,14 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ item: item.name, [field]: newPrice }),
         });
+        item[field] = newPrice;
         return null;
       } catch (err) {
         controls.saveBtn.disabled = false;
         controls.cancelBtn.disabled = false;
         return err.message === "unauthorized" ? null : (err.message || "Failed to save.");
       }
-    });
+    }, onSaved);
 
     wrap.appendChild(priceInput);
     wrap.appendChild(controls.btnRow);

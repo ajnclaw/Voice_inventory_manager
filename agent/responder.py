@@ -336,8 +336,14 @@ class Responder:
                 if result.get("success"):
                     output = result.get("output")
 
+                    # A single product gets the same table as several, not
+                    # just its picture: the table is what the owner taps
+                    # to change a price or stock without typing a command.
+                    # The latest lookup wins, so the table matches what
+                    # the reply ended up talking about.
                     if tool_name == "check_stock" and isinstance(output, dict):
                         last_item_image = output.get("image_path") or last_item_image
+                        last_item_list = [output]
                     elif tool_name in (
                         "search_items",
                         "list_inventory",
@@ -347,7 +353,7 @@ class Responder:
                             last_item_image = (
                                 output[0].get("image_path") or last_item_image
                             )
-                        elif len(output) > 1:
+                        if output:
                             last_item_list = output
 
                 messages.append(
