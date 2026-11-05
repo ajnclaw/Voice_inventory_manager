@@ -763,6 +763,13 @@
     border-bottom: none;
   }
 
+  .chat-items-table .image-cell-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
   .chat-items-table td.editable-cell {
     cursor: pointer;
     text-decoration: underline;
@@ -1392,9 +1399,38 @@
 
       const imageCell = document.createElement("td");
       row.appendChild(imageCell);
-      if (item.image_url) {
-        appendAuthenticatedImage(imageCell, item.image_url, "inventory-row-image");
+
+      const imageInner = document.createElement("div");
+      imageInner.className = "image-cell-inner";
+      imageCell.appendChild(imageInner);
+
+      // The picture is shown after the button (it arrives asynchronously),
+      // so the button stays at a fixed spot while the picture changes.
+      function showPicture() {
+        imageInner.querySelectorAll("img").forEach(function (img) {
+          img.remove();
+        });
+        if (item.image_url) {
+          appendAuthenticatedImage(imageInner, item.image_url, "inventory-row-image");
+        }
       }
+
+      const photoBtn = document.createElement("button");
+      photoBtn.className = "photo-btn";
+      photoBtn.textContent = "📷";
+      photoBtn.title = "Add or change this product's photo (camera or gallery)";
+      photoBtn.setAttribute("aria-label", photoBtn.title);
+      photoBtn.addEventListener("click", function () {
+        showPhotoMenu(item, photoBtn, function (imagePath) {
+          item.image_url = "/product_images/" + imagePath.split("/").pop();
+          photoBtn.disabled = false;
+          photoBtn.textContent = "📷";
+          photoBtn.title = "Add or change this product's photo (camera or gallery)";
+          showPicture();
+        });
+      });
+      imageInner.appendChild(photoBtn);
+      showPicture();
 
       // Same tap-to-edit cells as the full inventory table, saved through
       // the same endpoints (no LLM involved). After a save only this cell
@@ -1458,7 +1494,7 @@
 
     const hint = document.createElement("div");
     hint.className = "chat-items-hint";
-    hint.textContent = "Tap Stock, Cost or Sale to change it.";
+    hint.textContent = "Tap Stock, Cost or Sale to change it, or 📷 to add a photo.";
     body.appendChild(hint);
   }
 
@@ -2680,7 +2716,10 @@
     }
   }
 
-  function showPhotoMenu(item, button) {
+  // `onUploaded(imagePath)` decides what to refresh after a successful
+  // upload; the default is the full inventory table, the chat table passes
+  // its own so only that row's picture changes.
+  function showPhotoMenu(item, button, onUploaded) {
     const alreadyOpenHere = photoMenu && photoMenu.dataset.item === item.name;
     closePhotoMenu();
     if (alreadyOpenHere) return;
@@ -2698,7 +2737,7 @@
       option.textContent = choice[0];
       option.addEventListener("click", function () {
         closePhotoMenu();
-        pickPhotoFor(item, button, choice[1]);
+        pickPhotoFor(item, button, choice[1], onUploaded);
       });
       photoMenu.appendChild(option);
     });
@@ -2749,7 +2788,7 @@
     });
   }
 
-  function pickPhotoFor(item, button, input) {
+  function pickPhotoFor(item, button, input, onUploaded) {
     input.value = "";
     input.onchange = async function () {
       const file = input.files && input.files[0];
@@ -2768,10 +2807,14 @@
           body: JSON.stringify({ item: item.name, content_base64: content }),
         });
 
-        // Patch just this item and re-render rather than refetching, so
-        // the table keeps its scroll position and filter.
-        item.image_path = data.output.image_path;
-        renderInventoryTable();
+        if (onUploaded) {
+          onUploaded(data.output.image_path);
+        } else {
+          // Patch just this item and re-render rather than refetching, so
+          // the table keeps its scroll position and filter.
+          item.image_path = data.output.image_path;
+          renderInventoryTable();
+        }
       } catch (err) {
         button.disabled = false;
         button.textContent = "⚠️";
